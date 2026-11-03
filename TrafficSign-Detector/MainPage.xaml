@@ -8,11 +8,89 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <!--
-        This is the main content area of your application.
-        Add your UI elements here — for example, controls, layouts, and data-bound views.
-        Use 'dotnet new winui-page' to create additional pages and navigate to them via
-        the Frame in MainWindow (RootFrame).
-    -->
-    <Grid />
+    <Grid Padding="20" ColumnSpacing="24">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="380" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <Grid Grid.Column="0" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Button
+                HorizontalAlignment="Stretch"
+                Click="PickFolder_Click"
+                Content="Weights folder" />
+            <TextBlock
+                x:Name="FolderPathText"
+                Grid.Row="1"
+                Text="No folder selected."
+                TextWrapping="Wrap" />
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                <Button Click="EnableAll_Click" Content="All on" />
+                <Button Click="DisableAll_Click" Content="All off" />
+            </StackPanel>
+            <ListView
+                x:Name="NeuronList"
+                Grid.Row="3"
+                SelectionMode="None">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="local:NeuronItem">
+                        <Grid Padding="2" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="72" />
+                            </Grid.ColumnDefinitions>
+                            <CheckBox
+                                Content="{x:Bind Name}"
+                                IsChecked="{x:Bind IsActive, Mode=TwoWay}" />
+                            <TextBlock
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Right"
+                                Text="{x:Bind ScoreText, Mode=OneWay}" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+
+        <Grid Grid.Column="1" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Button Click="PickImage_Click" Content="Choose image" />
+            <Border
+                Grid.Row="1"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="12">
+                <Image
+                    x:Name="PreviewImage"
+                    Stretch="Uniform" />
+            </Border>
+            <TextBlock
+                x:Name="AnswerText"
+                Grid.Row="2"
+                FontSize="28"
+                Text="Choose a weights folder and an image."
+                TextWrapping="Wrap" />
+            <InfoBar
+                x:Name="StatusBar"
+                Grid.Row="3"
+                IsClosable="True"
+                IsOpen="False" />
+        </Grid>
+    </Grid>
 </Page>

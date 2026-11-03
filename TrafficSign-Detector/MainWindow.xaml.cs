@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Windows.Graphics;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -20,6 +21,7 @@ namespace TrafficSign_Detector
             SetTitleBar(AppTitleBar);
 
             AppWindow.SetIcon("Assets/AppIcon.ico");
+            AppWindow.Resize(new SizeInt32(1080, 760));
 
             // Navigate the root frame to the main page on startup.
             RootFrame.Navigate(typeof(MainPage));

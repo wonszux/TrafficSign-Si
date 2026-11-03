@@ -21,6 +21,8 @@ namespace TrafficSign_Detector
     /// </summary>
     public partial class App : Application
     {
+        public static Window? Window { get; private set; }
+
         private Window? _window;
 
         /// <summary>
@@ -39,6 +41,7 @@ namespace TrafficSign_Detector
         protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
         {
             _window = new MainWindow();
+            Window = _window;
             _window.Activate();
         }
     }
