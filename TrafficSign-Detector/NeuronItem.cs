@@ -18,6 +18,10 @@ public sealed class NeuronItem : INotifyPropertyChanged
 
     public SignLayer Layer { get; }
 
+    public NeuronHit ScanHit { get; set; }
+
+    public double? PlacedScore { get; set; }
+
     public bool IsActive
     {
         get => _isActive;

@@ -19,6 +19,11 @@ public class Program
             return RunBatch(args);
         }
 
+        if (args.Length == 2 && args[0] == "--names")
+        {
+            return WriteNames(args[1]);
+        }
+
         if (args.Length != 2)
         {
             Console.Error.WriteLine("Usage: TrafficSign-Trainer <plik_wag.json> <folder_zdjec>");
@@ -41,7 +46,7 @@ public class Program
             Console.WriteLine("Press any key or Ctrl+C to stop and save.");
 
             TrainUntilStopped(layer, trainingSet.Samples);
-            Save(weightsPath, layer.Weights);
+            Save(weightsPath, layer.Weights, Path.GetFileNameWithoutExtension(weightsPath));
             Console.WriteLine($"Saved weights: {weightsPath}");
             return 0;
         }
@@ -93,7 +98,8 @@ public class Program
             }
 
             int imageCount = classes.Sum(classImages => classImages.Inputs.Length);
-            Console.WriteLine($"Loaded {classes.Length} classes, {imageCount} images.");
+            double[][] backgrounds = SampleLoader.LoadInputs(Path.Combine(imagesRoot, "background"), ImageExtensions);
+            Console.WriteLine($"Loaded {classes.Length} classes, {imageCount} images, {backgrounds.Length} background images.");
 
             var negativesByClass = new Dictionary<string, double[][]>(classes.Length, StringComparer.Ordinal);
             foreach (ClassImages positive in classes)
@@ -133,6 +139,7 @@ public class Program
                             TrainClass(
                                 positive,
                                 negativesByClass[positive.Name],
+                                backgrounds,
                                 weightsDirectory,
                                 seconds,
                                 threadNumber,
@@ -178,6 +185,7 @@ public class Program
     private static void TrainClass(
         ClassImages positive,
         double[][] negatives,
+        double[][] backgrounds,
         string weightsDirectory,
         int seconds,
         int threadNumber,
@@ -193,7 +201,7 @@ public class Program
         while (Environment.TickCount64 < deadline)
         {
             epochs++;
-            FillBalanced(batch, positive.Inputs, negatives);
+            FillBalanced(batch, positive.Inputs, negatives, backgrounds);
             Random.Shared.Shuffle(batch);
             double absoluteError = 0;
             int processed = 0;
@@ -215,7 +223,7 @@ public class Program
             }
         }
 
-        Save(weightsPath, layer.Weights);
+        Save(weightsPath, layer.Weights, positive.Name);
         lock (consoleLock)
         {
             Console.WriteLine(
@@ -223,11 +231,24 @@ public class Program
         }
     }
 
-    private static void FillBalanced(TrainingSample[] batch, double[][] positives, double[][] negatives)
+    private static void FillBalanced(
+        TrainingSample[] batch,
+        double[][] positives,
+        double[][] negatives,
+        double[][] backgrounds)
     {
         int count = batch.Length / 2;
         CopyInputs(positives, batch, 0, count, 1.0);
-        CopyInputs(negatives, batch, count, count, 0.0);
+        if (backgrounds.Length == 0 || negatives.Length == 0)
+        {
+            CopyInputs(backgrounds.Length == 0 ? negatives : backgrounds, batch, count, count, 0.0);
+            return;
+        }
+
+        int backgroundCount = Math.Min(backgrounds.Length, (count + 1) / 2);
+        int signCount = count - backgroundCount;
+        CopyInputs(negatives, batch, count, signCount, 0.0);
+        CopyInputs(backgrounds, batch, count + signCount, backgroundCount, 0.0);
     }
 
     private static void CopyInputs(double[][] source, TrainingSample[] destination, int offset, int count, double target)
@@ -262,8 +283,7 @@ public class Program
         {
             try
             {
-                double[] weights = JsonSerializer.Deserialize<double[]>(File.ReadAllText(weightsPath))
-                    ?? throw new JsonException("Weights cannot be null.");
+                double[] weights = ReadWeights(File.ReadAllText(weightsPath));
                 NeuralLayer continued = new NeuralLayer(weights);
                 lock (consoleLock)
                 {
@@ -296,14 +316,12 @@ public class Program
         if (!File.Exists(weightsPath))
         {
             NeuralLayer created = NeuralLayer.CreateRandom();
-            Save(weightsPath, created.Weights);
+            Save(weightsPath, created.Weights, Path.GetFileNameWithoutExtension(weightsPath));
             Console.WriteLine($"Created weights: {weightsPath}");
             return created;
         }
 
-        using FileStream weightsFile = File.OpenRead(weightsPath);
-        double[] weights = JsonSerializer.Deserialize<double[]>(weightsFile)
-            ?? throw new JsonException("Weights cannot be null.");
+        double[] weights = ReadWeights(File.ReadAllText(weightsPath));
         Console.WriteLine($"Loaded weights: {weightsPath}");
         double meanSquare = weights.Average(weight => weight * weight);
         if (meanSquare > NeuralLayer.InitialWeightScale * NeuralLayer.InitialWeightScale * 64)
@@ -446,7 +464,29 @@ public class Program
         }
     }
 
-    private static void Save(string weightsPath, double[] weights)
+    private static int WriteNames(string weightsDirectory)
+    {
+        foreach (string path in Directory.EnumerateFiles(weightsDirectory, "*.json"))
+        {
+            string className = Path.GetFileNameWithoutExtension(path);
+            Save(path, ReadWeights(File.ReadAllText(path)), className);
+            Console.WriteLine($"{className} -> {SignNames.Display(className)}");
+        }
+
+        return 0;
+    }
+
+    private static double[] ReadWeights(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement root = document.RootElement;
+        JsonElement array = root.ValueKind == JsonValueKind.Array
+            ? root
+            : root.GetProperty("weights");
+        return array.Deserialize<double[]>() ?? throw new JsonException("Weights cannot be null.");
+    }
+
+    private static void Save(string weightsPath, double[] weights, string className)
     {
         string? directory = Path.GetDirectoryName(weightsPath);
         if (!string.IsNullOrEmpty(directory))
@@ -454,6 +494,14 @@ public class Program
             Directory.CreateDirectory(directory);
         }
 
-        File.WriteAllText(weightsPath, JsonSerializer.Serialize(weights));
+        var document = new WeightDocument(SignNames.Display(className), weights);
+        File.WriteAllText(weightsPath, JsonSerializer.Serialize(document, JsonOptions));
     }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    private sealed record WeightDocument(string Name, double[] Weights);
 }

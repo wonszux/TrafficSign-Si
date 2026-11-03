@@ -8,7 +8,18 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Padding="20" ColumnSpacing="24">
+    <Grid
+        Padding="20"
+        AllowDrop="True"
+        ColumnSpacing="24"
+        DragOver="Root_DragOver"
+        Drop="Root_Drop">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator
+                Key="V"
+                Invoked="Paste_Invoked"
+                Modifiers="Control" />
+        </Grid.KeyboardAccelerators>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="380" />
             <ColumnDefinition Width="*" />
@@ -46,9 +57,9 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="72" />
                             </Grid.ColumnDefinitions>
-                            <CheckBox
-                                Content="{x:Bind Name}"
-                                IsChecked="{x:Bind IsActive, Mode=TwoWay}" />
+                            <CheckBox IsChecked="{x:Bind IsActive, Mode=TwoWay}">
+                                <TextBlock Text="{x:Bind Name}" TextWrapping="Wrap" />
+                            </CheckBox>
                             <TextBlock
                                 Grid.Column="1"
                                 VerticalAlignment="Center"
@@ -66,6 +77,7 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <Button Click="PickImage_Click" Content="Choose image" />
@@ -76,19 +88,61 @@
                 BorderThickness="1"
                 CornerRadius="8"
                 Padding="12">
-                <Image
-                    x:Name="PreviewImage"
-                    Stretch="Uniform" />
+                <Grid x:Name="PreviewHost" SizeChanged="PreviewHost_SizeChanged">
+                    <Image
+                        x:Name="PreviewImage"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Stretch="Fill" />
+                    <Canvas
+                        x:Name="HitCanvas"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        PointerWheelChanged="HitCanvas_PointerWheelChanged">
+                        <Rectangle
+                            x:Name="HitRectangle"
+                            Fill="Transparent"
+                            Stroke="#E81123"
+                            StrokeThickness="3"
+                            Visibility="Collapsed"
+                            DoubleTapped="HitRectangle_DoubleTapped"
+                            PointerEntered="HitRectangle_PointerEntered"
+                            PointerExited="HitRectangle_PointerExited"
+                            PointerPressed="HitRectangle_PointerPressed"
+                            PointerMoved="HitRectangle_PointerMoved"
+                            PointerReleased="HitRectangle_PointerReleased"
+                            PointerCaptureLost="HitRectangle_PointerCaptureLost" />
+                        <Rectangle
+                            x:Name="ResizeHandle"
+                            Width="16"
+                            Height="16"
+                            Fill="#E81123"
+                            Visibility="Collapsed"
+                            PointerEntered="ResizeHandle_PointerEntered"
+                            PointerExited="HitRectangle_PointerExited"
+                            PointerPressed="ResizeHandle_PointerPressed"
+                            PointerMoved="ResizeHandle_PointerMoved"
+                            PointerReleased="ResizeHandle_PointerReleased"
+                            PointerCaptureLost="HitRectangle_PointerCaptureLost" />
+                    </Canvas>
+                </Grid>
             </Border>
             <TextBlock
                 x:Name="AnswerText"
                 Grid.Row="2"
                 FontSize="28"
-                Text="Choose a weights folder and an image."
+                Text="Choose, paste, or drop an image."
                 TextWrapping="Wrap" />
+            <TextBlock
+                x:Name="DragHint"
+                Grid.Row="3"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Drag the square. Scroll to resize it. Double-click it to cover the photo."
+                Visibility="Collapsed" />
             <InfoBar
                 x:Name="StatusBar"
-                Grid.Row="3"
+                Grid.Row="4"
                 IsClosable="True"
                 IsOpen="False" />
         </Grid>

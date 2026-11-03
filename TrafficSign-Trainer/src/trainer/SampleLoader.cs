@@ -58,7 +58,8 @@ namespace TrafficSign_Trainer.src.trainer
             foreach (string directory in Directory.EnumerateDirectories(root).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
             {
                 string name = Path.GetFileName(directory);
-                if (name.Equals("weights", StringComparison.OrdinalIgnoreCase))
+                if (name.Equals("weights", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("background", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -78,6 +79,18 @@ namespace TrafficSign_Trainer.src.trainer
             }
 
             return classes.ToArray();
+        }
+
+        public static double[][] LoadInputs(string directory, IReadOnlySet<string> imageExtensions)
+        {
+            if (!Directory.Exists(directory))
+            {
+                return [];
+            }
+
+            return LoadDirectory(directory, 0.0, imageExtensions)
+                .Select(sample => sample.Inputs)
+                .ToArray();
         }
 
         private static TrainingSample[] LoadDirectory(

@@ -11,20 +11,33 @@ public sealed class SignLayer
 
     private readonly double[] _weights;
 
-    private SignLayer(double[] weights)
+    private SignLayer(double[] weights, string? displayName)
     {
         _weights = weights;
+        DisplayName = displayName;
     }
+
+    public string? DisplayName { get; }
 
     public static SignLayer FromJson(string json)
     {
-        double[]? weights = JsonSerializer.Deserialize<double[]>(json);
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement root = document.RootElement;
+        string? displayName = null;
+        JsonElement array = root;
+        if (root.ValueKind != JsonValueKind.Array)
+        {
+            displayName = root.TryGetProperty("name", out JsonElement name) ? name.GetString() : null;
+            array = root.GetProperty("weights");
+        }
+
+        double[]? weights = array.Deserialize<double[]>();
         if (weights is null || weights.Length != WeightCount || weights.Any(weight => !double.IsFinite(weight)))
         {
             throw new JsonException($"Expected {WeightCount} finite numbers.");
         }
 
-        return new SignLayer(weights);
+        return new SignLayer(weights, string.IsNullOrWhiteSpace(displayName) ? null : displayName);
     }
 
     public double Forward(double[] inputs)
