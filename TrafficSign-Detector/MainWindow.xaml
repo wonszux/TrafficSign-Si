@@ -24,11 +24,11 @@
                     <TextBlock Text="Wybierz model i zdjęcie jednego, wykadrowanego znaku." TextWrapping="Wrap" />
                 </StackPanel>
                 <StackPanel Spacing="8">
-                    <Button x:Name="ChooseModelButton" Content="1. Wybierz model JSON" Click="ChooseModel_Click"
+                    <Button x:Name="ChooseModelButton" Content="1. Wybierz model JSON" Click="ChooseModelAsync"
                             AutomationProperties.Name="Wybierz model JSON" />
                     <TextBlock x:Name="ModelDescription" Text="Model nie został wybrany." TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <Button x:Name="ChooseImageButton" Content="2. Wybierz zdjęcie" Click="ChooseImage_Click"
+                    <Button x:Name="ChooseImageButton" Content="2. Wybierz zdjęcie" Click="ChooseImageAsync"
                             AutomationProperties.Name="Wybierz zdjęcie znaku w formacie JPEG lub PNG" />
                     <TextBlock x:Name="ImageDescription" Text="Obsługiwane obrazy: JPEG i PNG." TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -42,7 +42,7 @@
                     </Grid>
                 </Border>
                 <StackPanel Orientation="Horizontal" Spacing="12">
-                    <Button x:Name="PredictButton" Content="3. Rozpoznaj znak" Click="Predict_Click" IsEnabled="False"
+                    <Button x:Name="PredictButton" Content="3. Rozpoznaj znak" Click="PredictAsync" IsEnabled="False"
                             Style="{StaticResource AccentButtonStyle}" AutomationProperties.Name="Rozpoznaj znak" />
                     <ProgressRing x:Name="BusyIndicator" Width="24" Height="24" IsActive="False" Visibility="Collapsed"
                                   AutomationProperties.Name="Trwa przetwarzanie" />

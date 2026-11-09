@@ -173,9 +173,21 @@ Nie ma frameworka uczenia maszynowego, serwera ani bazy danych.
 Manifest podziału wymaga jawnego `formatVersion: 1`; brak wersji jest błędem.
 Istniejące modele, wersjonowane manifesty i raporty v1 zachowują zgodność.
 
+Konwencje nazewnictwa i formatowania ustala [`.editorconfig`](.editorconfig),
+zgodnie z [konwencjami C# Microsoft](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/identifier-names).
+Analizatory SDK i reguły stylu działają przy kompilacji. Lokalne sprawdzenie
+formatowania i diagnostyki o poziomie warning lub wyższym:
+
+```powershell
+dotnet format TrafficSign-Si.slnx --verify-no-changes --no-restore --severity warn
+```
+
 Workflow [build.yml](.github/workflows/build.yml) sprawdza locked restore,
-build Release x64 i testy na Windows. Jego wykonanie na GitHub wymaga osobnego
+build Release x64, styl kodu i testy na Windows. Jego wykonanie na GitHub wymaga osobnego
 potwierdzenia; lokalny build nie dowodzi sukcesu hostowanego runnera.
 
 Aktualny plan, wynik recenzji i status wdrożenia:
 [PLAN-IMPLEMENTACJI.md](docs/PLAN-IMPLEMENTACJI.md).
+
+Zakres zmian jakościowych i wyniki ich weryfikacji:
+[PODSUMOWANIE-REFAKTORYZACJI.md](docs/PODSUMOWANIE-REFAKTORYZACJI.md).

@@ -20,14 +20,21 @@ public sealed class DatasetTests
             }).ToArray();
         string manifest = files.PathFor("groups.json");
         File.WriteAllText(manifest, JsonSerializer.Serialize(new SplitManifest { FormatVersion = 1, Entries = entries }, ModelFile.JsonOptions));
-        var a = Dataset.Load(root, manifest, 42);
-        var b = Dataset.Load(root, manifest, 42);
-        Assert.Equal(a.Fingerprint, b.Fingerprint);
-        Assert.True(a.CompleteGroupingMetadata);
-        foreach (var group in a.Samples.GroupBy(sample => sample.GroupId)) Assert.Single(group.Select(sample => sample.Split).Distinct());
+        var firstDataset = Dataset.Load(root, manifest, 42);
+        var repeatedDataset = Dataset.Load(root, manifest, 42);
+        Assert.Equal(firstDataset.Fingerprint, repeatedDataset.Fingerprint);
+        Assert.True(firstDataset.CompleteGroupingMetadata);
+        foreach (var group in firstDataset.Samples.GroupBy(sample => sample.GroupId))
+        {
+            Assert.Single(group.Select(sample => sample.Split).Distinct());
+        }
+
         foreach (var split in Enum.GetValues<DatasetSplit>())
-            Assert.Equal(2, a.Samples.Where(sample => sample.Split == split).Select(sample => sample.LabelIndex).Distinct().Count());
-        Assert.Equal(a.Samples.Length, a.Samples.Select(sample => sample.RelativePath).Distinct().Count());
+        {
+            Assert.Equal(2, firstDataset.Samples.Where(sample => sample.Split == split).Select(sample => sample.LabelIndex).Distinct().Count());
+        }
+
+        Assert.Equal(firstDataset.Samples.Length, firstDataset.Samples.Select(sample => sample.RelativePath).Distinct().Count());
     }
 
     [Fact]

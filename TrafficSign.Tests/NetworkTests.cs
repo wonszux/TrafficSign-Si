@@ -5,6 +5,26 @@ namespace TrafficSign.Tests;
 
 public sealed class NetworkTests
 {
+    [Fact]
+    public void ComputingGradientsDoesNotMutateInputsOrNetworkParameters()
+    {
+        var network = NeuralNetwork.Create(2, ["a", "b"], 42);
+        var inputs = Enumerable.Repeat(0.25, ImagePreprocessor.InputSize).ToArray();
+        var expectedInputs = (double[])inputs.Clone();
+        var expectedModel = network.GetModel();
+        var expectedScores = network.Predict(inputs);
+
+        network.ComputeGradients(inputs, 1);
+
+        var actualModel = network.GetModel();
+        Assert.Equal(expectedInputs, inputs);
+        Assert.Equal(expectedScores, network.Predict(inputs));
+        Assert.Equal(expectedModel.HiddenWeights, actualModel.HiddenWeights);
+        Assert.Equal(expectedModel.HiddenBiases, actualModel.HiddenBiases);
+        Assert.Equal(expectedModel.OutputWeights, actualModel.OutputWeights);
+        Assert.Equal(expectedModel.OutputBiases, actualModel.OutputBiases);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -44,9 +64,10 @@ public sealed class NetworkTests
         model.HiddenWeights[0] = 100; // Must not mutate the constructed network.
         var inputs = new double[ImagePreprocessor.InputSize];
         inputs[0] = 0.8;
-        double h = Math.Tanh(0.5);
-        double a = 0.7 * h + 0.2, b = -0.4 * h - 0.3;
-        double expected = 1 / (1 + Math.Exp(b - a));
+        double hiddenActivation = Math.Tanh(0.5);
+        double firstLogit = 0.7 * hiddenActivation + 0.2;
+        double secondLogit = -0.4 * hiddenActivation - 0.3;
+        double expected = 1 / (1 + Math.Exp(secondLogit - firstLogit));
         Assert.Equal(expected, network.Predict(inputs)[0], 12);
         Assert.Equal(1.0, network.Predict(inputs).Sum(), 12);
         var exported = network.GetModel();
@@ -79,16 +100,16 @@ public sealed class NetworkTests
 
         void Check(double[] parameters, double[] expected)
         {
-            const double epsilon = 1e-5;
+            const double Epsilon = 1e-5;
             for (int i = 0; i < parameters.Length; i++)
             {
                 double original = parameters[i];
-                parameters[i] = original + epsilon;
+                parameters[i] = original + Epsilon;
                 double plus = new NeuralNetwork(model).Loss(input, 1);
-                parameters[i] = original - epsilon;
+                parameters[i] = original - Epsilon;
                 double minus = new NeuralNetwork(model).Loss(input, 1);
                 parameters[i] = original;
-                double numerical = (plus - minus) / (2 * epsilon);
+                double numerical = (plus - minus) / (2 * Epsilon);
                 Assert.True(Math.Abs(numerical - expected[i]) <= 1e-7 + 1e-4 * Math.Max(Math.Abs(numerical), Math.Abs(expected[i])),
                     $"Gradient {i}: numerical={numerical}, backprop={expected[i]}");
             }
@@ -99,14 +120,19 @@ public sealed class NetworkTests
     public void TinyTrainingMemorizesOppositeExamples()
     {
         var network = NeuralNetwork.Create(4, ["a", "b"], 123);
-        var a = new double[ImagePreprocessor.InputSize];
-        var b = new double[ImagePreprocessor.InputSize];
-        a[0] = 1; b[1] = 1;
-        double before = network.Loss(a, 0) + network.Loss(b, 1);
-        for (int i = 0; i < 300; i++) { network.TrainSample(a, 0, 0.1); network.TrainSample(b, 1, 0.1); }
-        Assert.True(network.Loss(a, 0) + network.Loss(b, 1) < before * 0.1);
-        Assert.True(network.Predict(a)[0] > 0.95);
-        Assert.True(network.Predict(b)[1] > 0.95);
+        var firstInput = new double[ImagePreprocessor.InputSize];
+        var secondInput = new double[ImagePreprocessor.InputSize];
+        firstInput[0] = 1;
+        secondInput[1] = 1;
+        double initialLoss = network.Loss(firstInput, 0) + network.Loss(secondInput, 1);
+        for (int iteration = 0; iteration < 300; iteration++)
+        {
+            network.TrainSample(firstInput, 0, 0.1);
+            network.TrainSample(secondInput, 1, 0.1);
+        }
+        Assert.True(network.Loss(firstInput, 0) + network.Loss(secondInput, 1) < initialLoss * 0.1);
+        Assert.True(network.Predict(firstInput)[0] > 0.95);
+        Assert.True(network.Predict(secondInput)[1] > 0.95);
     }
 
     [Fact]
@@ -120,9 +146,9 @@ public sealed class NetworkTests
         var input = Enumerable.Repeat(0.5, ImagePreprocessor.InputSize).ToArray();
         Assert.Equal(new NeuralNetwork(model).Predict(input), new NeuralNetwork(loaded).Predict(input));
         Assert.Throws<IOException>(() => ModelFile.Save(path, model));
+        Assert.Empty(Directory.GetFiles(files.Root, "*.tmp"));
         model.HiddenWeights[0] = double.NaN;
         Assert.Throws<InvalidDataException>(model.Validate);
-        var invalid = NeuralNetwork.Create(1, ["a", "b"], 42).GetModel();
         File.WriteAllText(path, "[]");
         Assert.Throws<System.Text.Json.JsonException>(() => ModelFile.Load(path));
         File.WriteAllText(path, "{\"formatVersion\":1}");
@@ -135,10 +161,14 @@ public sealed class NetworkTests
         var model = NeuralNetwork.Create(1, ["a", "b"], 42).GetModel();
         var invalid = new ModelData
         {
-            FormatVersion = 1, HiddenSize = model.HiddenSize, Labels = model.Labels,
+            FormatVersion = 1,
+            HiddenSize = model.HiddenSize,
+            Labels = model.Labels,
             Preprocessing = new() { Id = "gray32-v1", Width = 64, Height = 32, Channels = 1 },
-            HiddenWeights = model.HiddenWeights, HiddenBiases = model.HiddenBiases,
-            OutputWeights = model.OutputWeights, OutputBiases = model.OutputBiases
+            HiddenWeights = model.HiddenWeights,
+            HiddenBiases = model.HiddenBiases,
+            OutputWeights = model.OutputWeights,
+            OutputBiases = model.OutputBiases
         };
         Assert.Throws<InvalidDataException>(invalid.Validate);
         Assert.Throws<ArgumentException>(() => new NeuralNetwork(model).Predict([1.0]));

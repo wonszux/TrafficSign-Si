@@ -39,25 +39,45 @@ public sealed class PreprocessingTests
         Assert.Equal(input.Take(32), input.Skip(32).Take(32));
     }
 
-    [Fact]
-    public void JpegExifRotationIsAppliedBeforeResize()
+    [Theory]
+    [InlineData(1, 0, 70, 150, 255)]
+    [InlineData(2, 70, 0, 255, 150)]
+    [InlineData(3, 255, 150, 70, 0)]
+    [InlineData(4, 150, 255, 0, 70)]
+    [InlineData(5, 0, 150, 70, 255)]
+    [InlineData(6, 150, 0, 255, 70)]
+    [InlineData(7, 255, 70, 150, 0)]
+    [InlineData(8, 70, 255, 0, 150)]
+    public void JpegExifOrientationIsAppliedBeforeResize(byte orientation, int topLeft, int topRight, int bottomLeft, int bottomRight)
     {
         using var files = new TestFiles();
         string path = files.PathFor("oriented.jpg");
         using (var bitmap = new SKBitmap(32, 16))
         {
             for (int y = 0; y < 16; y++)
-                for (int x = 0; x < 32; x++) bitmap.SetPixel(x, y, x < 16 ? SKColors.Black : SKColors.White);
+            {
+                for (int x = 0; x < 32; x++)
+                {
+                    byte value = (byte)(y < 8 ? (x < 16 ? 0 : 70) : (x < 16 ? 150 : 255));
+                    bitmap.SetPixel(x, y, new SKColor(value, value, value));
+                }
+            }
+
             SaveBitmap(bitmap, path, SKEncodedImageFormat.Jpeg);
         }
         byte[] jpeg = File.ReadAllBytes(path);
-        // EXIF little-endian IFD: Orientation (0x0112), SHORT, one value, rotate 90 degrees clockwise.
+        // EXIF little-endian IFD: Orientation (0x0112), SHORT, one value.
         byte[] exif = [0xff, 0xe1, 0x00, 0x22, 0x45, 0x78, 0x69, 0x66, 0, 0,
-            0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0];
+            0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, orientation, 0, 0, 0, 0, 0, 0, 0];
         File.WriteAllBytes(path, [.. jpeg.Take(2), .. exif, .. jpeg.Skip(2)]);
         var input = ImagePreprocessor.Process(path);
-        Assert.All(input.Take(32), value => Assert.InRange(value, 0, 0.02));
-        Assert.All(input.Skip(31 * 32), value => Assert.InRange(value, 0.98, 1));
+        int[] cornerIndices = [0, 31, 31 * 32, 32 * 32 - 1];
+        int[] expectedCorners = [topLeft, topRight, bottomLeft, bottomRight];
+        for (int cornerIndex = 0; cornerIndex < cornerIndices.Length; cornerIndex++)
+        {
+            double expected = expectedCorners[cornerIndex] / 255.0;
+            Assert.InRange(input[cornerIndices[cornerIndex]], expected - 0.02, expected + 0.02);
+        }
     }
 
     [Fact]

@@ -7,13 +7,16 @@ namespace TrafficSign.Trainer;
 
 internal static class DatasetLoader
 {
+    private const int MaximumImages = 20_000;
+    private const double HeldOutSplitFraction = 0.15;
+
     // One entry owns all metadata for an image while its split is being prepared.
     private sealed class PreparedImage(string fullPath, string relativePath, int labelIndex)
     {
         public string FullPath { get; } = fullPath;
         public string RelativePath { get; } = relativePath;
         public int LabelIndex { get; } = labelIndex;
-        public string Sha256 { get; set; } = "";
+        public string Sha256 { get; set; } = string.Empty;
         public string? GroupId { get; set; }
         public DatasetSplit? Split { get; set; }
     }
@@ -54,30 +57,30 @@ internal static class DatasetLoader
         }
 
         var images = new List<PreparedImage>();
-        int ignored = Directory.GetFiles(root).Length;
-        for (int label = 0; label < labels.Length; label++)
+        int ignoredFiles = Directory.GetFiles(root).Length;
+        for (int labelIndex = 0; labelIndex < labels.Length; labelIndex++)
         {
-            string[] candidates = Directory.GetFiles(classDirectories[label]).Order(StringComparer.Ordinal).ToArray();
-            ignored += candidates.Count(path => !ImagePreprocessor.IsSupportedPath(path));
-            string[] supported = candidates.Where(ImagePreprocessor.IsSupportedPath).ToArray();
-            if (supported.Length == 0)
+            string[] candidates = Directory.GetFiles(classDirectories[labelIndex]).Order(StringComparer.Ordinal).ToArray();
+            ignoredFiles += candidates.Count(path => !ImagePreprocessor.IsSupportedPath(path));
+            string[] supportedPaths = candidates.Where(ImagePreprocessor.IsSupportedPath).ToArray();
+            if (supportedPaths.Length == 0)
             {
-                throw new InvalidDataException($"Class '{labels[label]}' contains no JPEG/PNG images.");
+                throw new InvalidDataException($"Class '{labels[labelIndex]}' contains no JPEG/PNG images.");
             }
-            if (Directory.GetDirectories(classDirectories[label]).Length > 0)
+            if (Directory.GetDirectories(classDirectories[labelIndex]).Length > 0)
             {
-                throw new InvalidDataException($"Nested image directories are unsupported: {classDirectories[label]}");
+                throw new InvalidDataException($"Nested image directories are unsupported: {classDirectories[labelIndex]}");
             }
-            images.AddRange(supported.Select(path =>
-                new PreparedImage(path, Path.GetRelativePath(root, path).Replace('\\', '/'), label)));
+            images.AddRange(supportedPaths.Select(path =>
+                new PreparedImage(path, Path.GetRelativePath(root, path).Replace('\\', '/'), labelIndex)));
         }
 
         // Eager decoding is deliberately limited to a small experiment (~160 MiB of vectors).
-        if (images.Count > 20_000)
+        if (images.Count > MaximumImages)
         {
             throw new InvalidDataException("Dataset exceeds 20,000 images. Select a smaller experiment.");
         }
-        return (labels, images.ToArray(), ignored);
+        return (labels, images.ToArray(), ignoredFiles);
     }
 
     private static Dictionary<string, SplitEntry>? LoadManifest(
@@ -116,10 +119,10 @@ internal static class DatasetLoader
             {
                 throw new InvalidDataException("Manifest entries require safe relative image paths.");
             }
-            string key = entry.Path.Replace('\\', '/');
-            if (!entries.TryAdd(key, entry))
+            string normalizedPath = entry.Path.Replace('\\', '/');
+            if (!entries.TryAdd(normalizedPath, entry))
             {
-                throw new InvalidDataException($"Duplicate manifest path: {key}");
+                throw new InvalidDataException($"Duplicate manifest path: {normalizedPath}");
             }
             if (requireCompleteSplit && entry.Sha256 is null)
             {
@@ -155,35 +158,36 @@ internal static class DatasetLoader
         int[] parents = Enumerable.Range(0, images.Length).ToArray();
         var hashOwners = new Dictionary<string, int>(StringComparer.Ordinal);
         var groupOwners = new Dictionary<string, int>(StringComparer.Ordinal);
-        for (int i = 0; i < images.Length; i++)
+        // Duplicate content and explicit groups form transitive components, which must never cross splits.
+        for (int imageIndex = 0; imageIndex < images.Length; imageIndex++)
         {
-            var image = images[i];
-            if (hashOwners.TryGetValue(image.Sha256, out int sameImage))
+            var image = images[imageIndex];
+            if (hashOwners.TryGetValue(image.Sha256, out int duplicateIndex))
             {
-                if (images[sameImage].LabelIndex != image.LabelIndex)
+                if (images[duplicateIndex].LabelIndex != image.LabelIndex)
                 {
                     throw new InvalidDataException($"Identical image has conflicting labels: {image.RelativePath}");
                 }
-                Union(sameImage, i);
+                Union(duplicateIndex, imageIndex);
             }
             else
             {
-                hashOwners[image.Sha256] = i;
+                hashOwners[image.Sha256] = imageIndex;
             }
             if (image.GroupId is { } group)
             {
-                if (groupOwners.TryGetValue(group, out int sameGroup))
+                if (groupOwners.TryGetValue(group, out int groupOwnerIndex))
                 {
-                    Union(sameGroup, i);
+                    Union(groupOwnerIndex, imageIndex);
                 }
                 else
                 {
-                    groupOwners[group] = i;
+                    groupOwners[group] = imageIndex;
                 }
             }
         }
 
-        var groups = Enumerable.Range(0, images.Length).GroupBy(Find)
+        var groups = Enumerable.Range(0, images.Length).GroupBy(FindRoot)
             .Select(group => group.Select(index => images[index]).ToArray()).ToArray();
         foreach (var group in groups)
         {
@@ -198,44 +202,44 @@ internal static class DatasetLoader
         }
         return groups;
 
-        int Find(int value)
+        int FindRoot(int imageIndex)
         {
-            while (parents[value] != value)
+            while (parents[imageIndex] != imageIndex)
             {
-                parents[value] = parents[parents[value]];
-                value = parents[value];
+                parents[imageIndex] = parents[parents[imageIndex]];
+                imageIndex = parents[imageIndex];
             }
-            return value;
+            return imageIndex;
         }
 
-        void Union(int a, int b) => parents[Find(b)] = Find(a);
+        void Union(int firstIndex, int secondIndex) => parents[FindRoot(secondIndex)] = FindRoot(firstIndex);
     }
 
     private static void AssignSplits(PreparedImage[][] groups, string[] labels, int seed, bool requireCompleteSplit)
     {
         var images = groups.SelectMany(group => group).ToArray();
         bool anyAssigned = images.Any(image => image.Split.HasValue);
-        bool reserveValidation = anyAssigned && !images.Any(image => image.Split == DatasetSplit.Validation);
+        bool needsValidationSplit = anyAssigned && !images.Any(image => image.Split == DatasetSplit.Validation);
         if (anyAssigned && images.Any(image => !image.Split.HasValue))
         {
             throw new InvalidDataException("Supply splits for all images, or leave all unassigned.");
         }
-        if (requireCompleteSplit && (!anyAssigned || reserveValidation))
+        if (requireCompleteSplit && (!anyAssigned || needsValidationSplit))
         {
             throw new InvalidDataException("Evaluation requires the exact saved train/validation/test split.");
         }
 
         var random = new Random(seed);
-        for (int label = 0; label < labels.Length; label++)
+        for (int labelIndex = 0; labelIndex < labels.Length; labelIndex++)
         {
-            var classGroups = groups.Where(group => group[0].LabelIndex == label).ToArray();
+            var classGroups = groups.Where(group => group[0].LabelIndex == labelIndex).ToArray();
             if (!anyAssigned)
             {
-                AssignAutomaticSplits(classGroups, labels[label], random);
+                AssignAutomaticSplits(classGroups, labels[labelIndex], random);
             }
-            else if (reserveValidation)
+            else if (needsValidationSplit)
             {
-                ReserveValidation(classGroups, labels[label], random);
+                ReserveValidation(classGroups, labels[labelIndex], random);
             }
         }
     }
@@ -247,8 +251,8 @@ internal static class DatasetLoader
             throw new InvalidDataException($"Class '{label}' needs at least three independent images/groups.");
         }
         random.Shuffle(groups);
-        int validationCount = Math.Clamp((int)Math.Round(groups.Length * 0.15), 1, groups.Length - 2);
-        int testCount = Math.Clamp((int)Math.Round(groups.Length * 0.15), 1, groups.Length - validationCount - 1);
+        int validationCount = Math.Clamp((int)Math.Round(groups.Length * HeldOutSplitFraction), 1, groups.Length - 2);
+        int testCount = Math.Clamp((int)Math.Round(groups.Length * HeldOutSplitFraction), 1, groups.Length - validationCount - 1);
         for (int i = 0; i < groups.Length; i++)
         {
             var split = i < testCount ? DatasetSplit.Test
@@ -268,8 +272,9 @@ internal static class DatasetLoader
             throw new InvalidDataException($"Class '{label}' needs at least two training groups to reserve validation.");
         }
         random.Shuffle(trainingGroups);
-        int count = Math.Clamp((int)Math.Round(trainingGroups.Length * 15.0 / 85), 1, trainingGroups.Length - 1);
-        foreach (var group in trainingGroups.Take(count))
+        // Reserve 15 of the nominal 85 non-test percent without changing the supplied test split.
+        int validationCount = Math.Clamp((int)Math.Round(trainingGroups.Length * 15.0 / 85), 1, trainingGroups.Length - 1);
+        foreach (var group in trainingGroups.Take(validationCount))
         {
             foreach (var image in group)
             {
@@ -280,13 +285,13 @@ internal static class DatasetLoader
 
     private static void ValidateSplitCoverage(PreparedImage[] images, string[] labels)
     {
-        for (int label = 0; label < labels.Length; label++)
+        for (int labelIndex = 0; labelIndex < labels.Length; labelIndex++)
         {
             foreach (var split in Enum.GetValues<DatasetSplit>())
             {
-                if (!images.Any(image => image.LabelIndex == label && image.Split == split))
+                if (!images.Any(image => image.LabelIndex == labelIndex && image.Split == split))
                 {
-                    throw new InvalidDataException($"Class '{labels[label]}' has no independent samples in {split.ToName()}.");
+                    throw new InvalidDataException($"Class '{labels[labelIndex]}' has no independent samples in {split.ToName()}.");
                 }
             }
         }
@@ -294,7 +299,8 @@ internal static class DatasetLoader
 
     private static DatasetSample[] DecodeSamples(PreparedImage[] images) => images.Select(image =>
         new DatasetSample(image.RelativePath, image.LabelIndex, image.Sha256, image.GroupId,
-            image.Split!.Value, ImagePreprocessor.Process(image.FullPath))).ToArray();
+            image.Split ?? throw new InvalidOperationException($"Image has no assigned split: {image.RelativePath}"),
+            ImagePreprocessor.Process(image.FullPath))).ToArray();
 
     private static string ComputeFingerprint(DatasetSample[] samples)
     {

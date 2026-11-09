@@ -9,6 +9,33 @@ namespace TrafficSign.Tests;
 public sealed class TrainerTests
 {
     [Fact]
+    public void EvaluationUsesActualRowsPredictedColumnsAndZeroRecallForAbsentClasses()
+    {
+        var model = NeuralNetwork.Create(1, ["a", "b", "c"], 42).GetModel();
+        Array.Clear(model.OutputWeights);
+        model.OutputBiases[0] = Math.Log(0.6);
+        model.OutputBiases[1] = Math.Log(0.3);
+        model.OutputBiases[2] = Math.Log(0.1);
+        var inputs = new double[ImagePreprocessor.InputSize];
+        DatasetSample[] samples =
+        [
+            new("a/1.png", 0, "", null, DatasetSplit.Test, inputs),
+            new("a/2.png", 0, "", null, DatasetSplit.Test, inputs),
+            new("b/1.png", 1, "", null, DatasetSplit.Test, inputs)
+        ];
+
+        var metrics = Training.Evaluate(new NeuralNetwork(model), samples, 3);
+
+        Assert.Equal(3, metrics.Count);
+        Assert.Equal(2.0 / 3, metrics.Accuracy, 12);
+        Assert.Equal((-2 * Math.Log(0.6) - Math.Log(0.3)) / 3, metrics.Loss, 12);
+        Assert.Equal(new[] { 1.0, 0.0, 0.0 }, metrics.RecallPerClass);
+        Assert.Equal(new[] { 2, 0, 0 }, metrics.ConfusionMatrix[0]);
+        Assert.Equal(new[] { 1, 0, 0 }, metrics.ConfusionMatrix[1]);
+        Assert.Equal(new[] { 0, 0, 0 }, metrics.ConfusionMatrix[2]);
+    }
+
+    [Fact]
     public void PublicationFailureRollsBackOnlyFilesCreatedByThisRun()
     {
         using var files = new TestFiles();
@@ -103,7 +130,9 @@ public sealed class TrainerTests
         string data = files.Dataset(3);
         var options = new Dictionary<string, string>
         {
-            ["--epochs"] = "1", ["--hidden-size"] = "1", ["--learning-rate"] = "0.01"
+            ["--epochs"] = "1",
+            ["--hidden-size"] = "1",
+            ["--learning-rate"] = "0.01"
         };
         options[option] = value;
         string[] args = [data, files.PathFor("output.json"), .. options.SelectMany(pair => new[] { pair.Key, pair.Value })];

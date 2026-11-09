@@ -8,9 +8,11 @@ internal sealed record ExperimentPaths(string Model, string Report, string Split
 {
     public static ExperimentPaths ForModel(string modelPath)
     {
-        string model = Path.GetFullPath(modelPath);
-        string stem = Path.Combine(Path.GetDirectoryName(model)!, Path.GetFileNameWithoutExtension(model));
-        return new ExperimentPaths(model, stem + ".report.json", stem + ".split.json", stem + ".test-report.json");
+        string fullModelPath = Path.GetFullPath(modelPath);
+        string directory = Path.GetDirectoryName(fullModelPath)
+            ?? throw new ArgumentException("Model path must name a file.", nameof(modelPath));
+        string stem = Path.Combine(directory, Path.GetFileNameWithoutExtension(fullModelPath));
+        return new ExperimentPaths(fullModelPath, stem + ".report.json", stem + ".split.json", stem + ".test-report.json");
     }
 
     public void EnsureTrainingOutputsAvailable() => ExperimentFiles.EnsureAvailable(Model, Report, Split);
@@ -99,7 +101,8 @@ internal static class ExperimentFiles
 
     private static void Cleanup(IEnumerable<string> paths, TextWriter output, Exception originalFailure)
     {
-        var remaining = new List<string>();
+        var remainingPaths = new List<string>();
+        var cleanupFailures = new List<Exception>();
         foreach (string path in paths)
         {
             try
@@ -108,23 +111,26 @@ internal static class ExperimentFiles
             }
             catch (Exception cleanupFailure) when (cleanupFailure is IOException or UnauthorizedAccessException)
             {
-                remaining.Add(path);
+                remainingPaths.Add(path);
+                cleanupFailures.Add(cleanupFailure);
             }
         }
-        if (remaining.Count == 0)
+        if (remainingPaths.Count == 0)
         {
             return;
         }
 
-        string message = "Cleanup could not remove: " + string.Join(", ", remaining);
+        string message = "Cleanup could not remove: " + string.Join(", ", remainingPaths);
         originalFailure.Data["CleanupFailures"] = message;
+        originalFailure.Data["CleanupExceptions"] = new AggregateException(cleanupFailures);
         try
         {
             output.WriteLine("Warning: " + message);
         }
-        catch (Exception)
+        catch (Exception diagnosticFailure)
         {
             // A failed diagnostic writer must not replace the publication failure.
+            originalFailure.Data["CleanupDiagnosticFailure"] = diagnosticFailure;
         }
     }
 }

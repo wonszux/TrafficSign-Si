@@ -3,14 +3,23 @@ using System.Text.Json;
 
 namespace TrafficSign.Trainer;
 
+/// <summary>Command-line entry point for training and evaluating saved experiments.</summary>
 public static class Program
 {
-    private const string Usage = "Usage: TrafficSign-Trainer <data-folder> <model.json> [--epochs N] [--learning-rate X] [--hidden-size N] [--seed N] [--split-manifest split.json]\n       TrafficSign-Trainer evaluate <model.json> <data-folder> <saved.split.json>";
+    private const string Usage = "Usage: TrafficSign-Trainer <data-folder> <model.json> [--epochs N] " +
+        "[--learning-rate X] [--hidden-size N] [--seed N] [--split-manifest split.json]\n" +
+        "       TrafficSign-Trainer evaluate <model.json> <data-folder> <saved.split.json>";
 
     public static int Main(string[] args) => Run(args, Console.Out, Console.Error);
 
+    /// <summary>Executes a command, reporting expected input, file and numeric failures to the error writer.</summary>
+    /// <returns>Zero on success (including help), or one for an expected failure.</returns>
     public static int Run(string[] args, TextWriter output, TextWriter error)
     {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(error);
+
         try
         {
             if (args.Length == 1 && args[0] is "--help" or "-h")
@@ -20,35 +29,25 @@ public static class Program
             }
             if (args.Length > 0 && args[0] == "evaluate")
             {
-                if (args.Length != 4) throw new ArgumentException(Usage);
+                if (args.Length != 4)
+                {
+                    throw new ArgumentException(Usage);
+                }
+
                 Training.EvaluateSaved(args[1], args[2], args[3], output);
                 return 0;
             }
-            if (args.Length < 2) throw new ArgumentException(Usage);
-            var options = new TrainingOptions();
-            string? manifest = null;
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            for (int i = 2; i < args.Length; i += 2)
+            if (args.Length < 2)
             {
-                if (i + 1 >= args.Length) throw new ArgumentException($"Missing value for {args[i]}.");
-                if (!seen.Add(args[i])) throw new ArgumentException($"Duplicate option: {args[i]}.");
-                string value = args[i + 1];
-                options = args[i] switch
-                {
-                    "--epochs" => options with { Epochs = ParseInteger(args[i], value) },
-                    "--learning-rate" => options with { LearningRate = ParseRate(value) },
-                    "--hidden-size" => options with { HiddenSize = ParseInteger(args[i], value) },
-                    "--seed" => options with { Seed = ParseInteger(args[i], value) },
-                    "--split-manifest" => options,
-                    _ => throw new ArgumentException($"Unknown option: {args[i]}.")
-                };
-                if (args[i] == "--split-manifest") manifest = value;
+                throw new ArgumentException(Usage);
             }
-            Training.Run(args[0], args[1], manifest, options, output);
+
+            var (options, manifestPath) = ParseTrainingOptions(args.AsSpan(2));
+            Training.Run(args[0], args[1], manifestPath, options, output);
             return 0;
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException
-            or JsonException or FormatException or OverflowException or ArithmeticException or NotSupportedException)
+            or JsonException or FormatException or ArithmeticException or NotSupportedException)
         {
             error.WriteLine($"Error: {exception.Message}");
             if (exception.Data["ModelTemporaryCleanupFailure"] is string cleanupMessage)
@@ -57,6 +56,42 @@ public static class Program
             }
             return 1;
         }
+    }
+
+    private static (TrainingOptions Options, string? ManifestPath) ParseTrainingOptions(ReadOnlySpan<string> arguments)
+    {
+        var options = new TrainingOptions();
+        string? manifestPath = null;
+        var seenOptions = new HashSet<string>(StringComparer.Ordinal);
+        for (int index = 0; index < arguments.Length; index += 2)
+        {
+            string option = arguments[index];
+            if (index + 1 >= arguments.Length)
+            {
+                throw new ArgumentException($"Missing value for {option}.");
+            }
+            if (!seenOptions.Add(option))
+            {
+                throw new ArgumentException($"Duplicate option: {option}.");
+            }
+
+            string value = arguments[index + 1];
+            if (option == "--split-manifest")
+            {
+                manifestPath = value;
+                continue;
+            }
+
+            options = option switch
+            {
+                "--epochs" => options with { Epochs = ParseInteger(option, value) },
+                "--learning-rate" => options with { LearningRate = ParseRate(value) },
+                "--hidden-size" => options with { HiddenSize = ParseInteger(option, value) },
+                "--seed" => options with { Seed = ParseInteger(option, value) },
+                _ => throw new ArgumentException($"Unknown option: {option}.")
+            };
+        }
+        return (options, manifestPath);
     }
 
     private static int ParseInteger(string option, string value) =>
