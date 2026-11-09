@@ -170,4 +170,12 @@ metadane serii. `data/`, `models/`, `runs/` i `artifacts/` są ignorowane przez 
 
 Dekodowanie używa [SkiaSharp (MIT)](https://github.com/mono/SkiaSharp/blob/main/LICENSE.txt).
 Nie ma frameworka uczenia maszynowego, serwera ani bazy danych.
-Plan, przyjęte założenia i status weryfikacji: [PLAN-DEBLOAT.md](docs/PLAN-DEBLOAT.md).
+Manifest podziału wymaga jawnego `formatVersion: 1`; brak wersji jest błędem.
+Istniejące modele, wersjonowane manifesty i raporty v1 zachowują zgodność.
+
+Workflow [build.yml](.github/workflows/build.yml) sprawdza locked restore,
+build Release x64 i testy na Windows. Jego wykonanie na GitHub wymaga osobnego
+potwierdzenia; lokalny build nie dowodzi sukcesu hostowanego runnera.
+
+Aktualny plan, wynik recenzji i status wdrożenia:
+[PLAN-IMPLEMENTACJI.md](docs/PLAN-IMPLEMENTACJI.md).

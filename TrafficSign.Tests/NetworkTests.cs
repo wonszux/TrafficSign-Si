@@ -5,6 +5,30 @@ namespace TrafficSign.Tests;
 
 public sealed class NetworkTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CombinedEvaluationMatchesPredictionAndStableLoss(bool hugeLogits)
+    {
+        var model = NeuralNetwork.Create(2, ["a", "b"], 42).GetModel();
+        if (hugeLogits)
+        {
+            Array.Clear(model.OutputWeights);
+            model.OutputBiases[0] = 1e16;
+            model.OutputBiases[1] = 1e16;
+        }
+        var network = new NeuralNetwork(model);
+        var input = Enumerable.Repeat(0.5, ImagePreprocessor.InputSize).ToArray();
+        var evaluation = network.EvaluateSample(input, 1);
+        var scores = network.Predict(input);
+        Assert.Equal(Array.IndexOf(scores, scores.Max()), evaluation.PredictedIndex);
+        Assert.Equal(network.Loss(input, 1), evaluation.Loss, 12);
+        if (hugeLogits)
+        {
+            Assert.Equal(Math.Log(2), evaluation.Loss, 12);
+        }
+    }
+
     [Fact]
     public void ForwardMatchesKnownWeightsAndOwnsParameters()
     {

@@ -13,7 +13,11 @@ public static class Program
     {
         try
         {
-            if (args.Length == 1 && args[0] is "--help" or "-h") { output.WriteLine(Usage); return 0; }
+            if (args.Length == 1 && args[0] is "--help" or "-h")
+            {
+                output.WriteLine(Usage);
+                return 0;
+            }
             if (args.Length > 0 && args[0] == "evaluate")
             {
                 if (args.Length != 4) throw new ArgumentException(Usage);
@@ -31,10 +35,10 @@ public static class Program
                 string value = args[i + 1];
                 options = args[i] switch
                 {
-                    "--epochs" => options with { Epochs = int.Parse(value, CultureInfo.InvariantCulture) },
-                    "--learning-rate" => options with { LearningRate = double.Parse(value, NumberStyles.Float, CultureInfo.InvariantCulture) },
-                    "--hidden-size" => options with { HiddenSize = int.Parse(value, CultureInfo.InvariantCulture) },
-                    "--seed" => options with { Seed = int.Parse(value, CultureInfo.InvariantCulture) },
+                    "--epochs" => options with { Epochs = ParseInteger(args[i], value) },
+                    "--learning-rate" => options with { LearningRate = ParseRate(value) },
+                    "--hidden-size" => options with { HiddenSize = ParseInteger(args[i], value) },
+                    "--seed" => options with { Seed = ParseInteger(args[i], value) },
                     "--split-manifest" => options,
                     _ => throw new ArgumentException($"Unknown option: {args[i]}.")
                 };
@@ -47,7 +51,19 @@ public static class Program
             or JsonException or FormatException or OverflowException or ArithmeticException or NotSupportedException)
         {
             error.WriteLine($"Error: {exception.Message}");
+            if (exception.Data["ModelTemporaryCleanupFailure"] is string cleanupMessage)
+            {
+                error.WriteLine($"Warning: {cleanupMessage}");
+            }
             return 1;
         }
     }
+
+    private static int ParseInteger(string option, string value) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)
+            ? parsed : throw new ArgumentException($"Invalid value for {option}: '{value}'. Expected an integer.");
+
+    private static double ParseRate(string value) =>
+        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
+            ? parsed : throw new ArgumentException($"Invalid value for --learning-rate: '{value}'. Use a decimal point.");
 }

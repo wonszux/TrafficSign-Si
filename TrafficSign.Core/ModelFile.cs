@@ -32,9 +32,17 @@ public static class ModelFile
                 JsonSerializer.Serialize(stream, model, JsonOptions);
             File.Move(temporary, target, overwrite: false);
         }
-        finally
+        catch (Exception failure)
         {
-            if (File.Exists(temporary)) File.Delete(temporary);
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch (Exception cleanupFailure) when (cleanupFailure is IOException or UnauthorizedAccessException)
+            {
+                failure.Data["ModelTemporaryCleanupFailure"] = $"Could not remove temporary model: {temporary}";
+            }
+            throw;
         }
     }
 }

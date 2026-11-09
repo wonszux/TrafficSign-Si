@@ -9,6 +9,39 @@ namespace TrafficSign.Tests;
 public sealed class TrainerTests
 {
     [Fact]
+    public void PublicationFailureRollsBackOnlyFilesCreatedByThisRun()
+    {
+        using var files = new TestFiles();
+        string data = files.Dataset(3);
+        string model = files.PathFor("model.json");
+        string collision = files.PathFor("model.report.json");
+        using var output = new OnEpochWriter(() => File.WriteAllText(collision, "preserve this file"));
+        var error = new StringWriter();
+
+        Assert.Equal(1, Program.Run([data, model, "--epochs", "1", "--hidden-size", "1"], output, error));
+        Assert.False(File.Exists(model));
+        Assert.False(File.Exists(files.PathFor("model.split.json")));
+        Assert.Equal("preserve this file", File.ReadAllText(collision));
+        Assert.Empty(Directory.GetFiles(files.Root, "*.tmp"));
+        Assert.NotEmpty(error.ToString());
+    }
+
+    private sealed class OnEpochWriter(Action callback) : StringWriter
+    {
+        private bool _called;
+
+        public override void WriteLine(string? value)
+        {
+            if (!_called && value?.StartsWith("Epoch ", StringComparison.Ordinal) == true)
+            {
+                _called = true;
+                callback();
+            }
+            base.WriteLine(value);
+        }
+    }
+
+    [Fact]
     public void SyntheticExperimentTrainsWritesArtifactsAndEvaluatesExactSavedModel()
     {
         using var files = new TestFiles();
@@ -57,14 +90,27 @@ public sealed class TrainerTests
     [Theory]
     [InlineData("--unknown", "42")]
     [InlineData("--epochs", "0")]
+    [InlineData("--epochs", "10001")]
     [InlineData("--learning-rate", "NaN")]
     [InlineData("--learning-rate", "0,1")]
+    [InlineData("--learning-rate", "0")]
+    [InlineData("--learning-rate", "11")]
     [InlineData("--hidden-size", "0")]
+    [InlineData("--hidden-size", "2049")]
     public void CliRejectsInvalidOptions(string option, string value)
     {
+        using var files = new TestFiles();
+        string data = files.Dataset(3);
+        var options = new Dictionary<string, string>
+        {
+            ["--epochs"] = "1", ["--hidden-size"] = "1", ["--learning-rate"] = "0.01"
+        };
+        options[option] = value;
+        string[] args = [data, files.PathFor("output.json"), .. options.SelectMany(pair => new[] { pair.Key, pair.Value })];
         var error = new StringWriter();
-        Assert.Equal(1, Program.Run(["missing-data", "output.json", option, value], TextWriter.Null, error));
-        Assert.NotEmpty(error.ToString());
+        Assert.Equal(1, Program.Run(args, TextWriter.Null, error));
+        Assert.Contains(option.TrimStart('-'), error.ToString());
+        Assert.Empty(Directory.GetFiles(files.Root, "*.json"));
     }
 
     [Fact]
@@ -82,9 +128,17 @@ public sealed class TrainerTests
     [Fact]
     public void HelpAndMissingOrDuplicateValuesHaveDefinedExitCodes()
     {
+        using var files = new TestFiles();
+        string data = files.Dataset(3);
+        string model = files.PathFor("output.json");
         Assert.Equal(0, Program.Run(["--help"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(1, Program.Run([], TextWriter.Null, TextWriter.Null));
-        Assert.Equal(1, Program.Run(["a", "b", "--epochs"], TextWriter.Null, TextWriter.Null));
-        Assert.Equal(1, Program.Run(["a", "b", "--epochs", "1", "--epochs", "2"], TextWriter.Null, TextWriter.Null));
+        var missing = new StringWriter();
+        Assert.Equal(1, Program.Run([data, model, "--epochs"], TextWriter.Null, missing));
+        Assert.Contains("Missing value for --epochs", missing.ToString());
+        var duplicate = new StringWriter();
+        Assert.Equal(1, Program.Run([data, model, "--epochs", "1", "--epochs", "2"], TextWriter.Null, duplicate));
+        Assert.Contains("Duplicate option: --epochs", duplicate.ToString());
+        Assert.Empty(Directory.GetFiles(files.Root, "*.json"));
     }
 }

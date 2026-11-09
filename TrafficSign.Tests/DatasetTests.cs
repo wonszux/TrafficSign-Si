@@ -19,13 +19,13 @@ public sealed class DatasetTests
                 GroupId = Path.GetFileName(Path.GetDirectoryName(path)) + "/" + (int.Parse(Path.GetFileNameWithoutExtension(path)) / 2)
             }).ToArray();
         string manifest = files.PathFor("groups.json");
-        File.WriteAllText(manifest, JsonSerializer.Serialize(new SplitManifest { Entries = entries }, ModelFile.JsonOptions));
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new SplitManifest { FormatVersion = 1, Entries = entries }, ModelFile.JsonOptions));
         var a = Dataset.Load(root, manifest, 42);
         var b = Dataset.Load(root, manifest, 42);
         Assert.Equal(a.Fingerprint, b.Fingerprint);
         Assert.True(a.CompleteGroupingMetadata);
         foreach (var group in a.Samples.GroupBy(sample => sample.GroupId)) Assert.Single(group.Select(sample => sample.Split).Distinct());
-        foreach (string split in new[] { "train", "validation", "test" })
+        foreach (var split in Enum.GetValues<DatasetSplit>())
             Assert.Equal(2, a.Samples.Where(sample => sample.Split == split).Select(sample => sample.LabelIndex).Distinct().Count());
         Assert.Equal(a.Samples.Length, a.Samples.Select(sample => sample.RelativePath).Distinct().Count());
     }
@@ -38,11 +38,11 @@ public sealed class DatasetTests
         var entries = Directory.GetFiles(root, "*.png", SearchOption.AllDirectories).Select(path =>
             new SplitEntry { Path = Path.GetRelativePath(root, path).Replace('\\', '/'), Split = Path.GetFileName(path) == "00.png" ? "test" : "train" }).ToArray();
         string manifest = files.PathFor("official.json");
-        File.WriteAllText(manifest, JsonSerializer.Serialize(new SplitManifest { Entries = entries }, ModelFile.JsonOptions));
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new SplitManifest { FormatVersion = 1, Entries = entries }, ModelFile.JsonOptions));
         var dataset = Dataset.Load(root, manifest, 7);
-        Assert.Equal(2, dataset.Samples.Count(sample => sample.Split == "test"));
-        Assert.All(dataset.Samples.Where(sample => sample.Split == "test"), sample => Assert.EndsWith("00.png", sample.RelativePath));
-        Assert.Equal(2, dataset.Samples.Where(sample => sample.Split == "validation").Select(sample => sample.LabelIndex).Distinct().Count());
+        Assert.Equal(2, dataset.Samples.Count(sample => sample.Split == DatasetSplit.Test));
+        Assert.All(dataset.Samples.Where(sample => sample.Split == DatasetSplit.Test), sample => Assert.EndsWith("00.png", sample.RelativePath));
+        Assert.Equal(2, dataset.Samples.Where(sample => sample.Split == DatasetSplit.Validation).Select(sample => sample.LabelIndex).Distinct().Count());
         string saved = files.PathFor("saved.json");
         File.WriteAllText(saved, JsonSerializer.Serialize(dataset.ToManifest(), ModelFile.JsonOptions));
         Assert.Equal(dataset.Fingerprint, Dataset.Load(root, saved, 999, requireCompleteSplit: true).Fingerprint);
@@ -62,7 +62,7 @@ public sealed class DatasetTests
         entries.Single(entry => entry.Path == "dark/00.png").Split = "train";
         entries.Single(entry => entry.Path == "dark/01.png").Split = "test";
         string manifest = files.PathFor("bad.json");
-        File.WriteAllText(manifest, JsonSerializer.Serialize(new SplitManifest { Entries = entries }, ModelFile.JsonOptions));
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new SplitManifest { FormatVersion = 1, Entries = entries }, ModelFile.JsonOptions));
         Assert.Throws<InvalidDataException>(() => Dataset.Load(root, manifest, 42));
         File.Copy(Path.Combine(root, "dark", "00.png"), Path.Combine(root, "light", "00.png"), overwrite: true);
         Assert.Throws<InvalidDataException>(() => Dataset.Load(root, null, 42));
