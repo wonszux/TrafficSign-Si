@@ -1,6 +1,6 @@
 namespace TrafficSign.Trainer;
 
-/// <summary>The versioned JSON contract for grouping images and preserving an experiment's exact splits.</summary>
+/// <summary>The versioned JSON contract for preserving image split assignments.</summary>
 public sealed class SplitManifest
 {
     public required int FormatVersion { get; init; }
@@ -12,8 +12,6 @@ public sealed class SplitEntry
 {
     public required string Path { get; init; }
     public string? Split { get; set; }
-    public string? GroupId { get; init; }
-    public string? Sha256 { get; init; }
 }
 
 public enum DatasetSplit
@@ -43,39 +41,32 @@ internal static class DatasetSplits
     };
 }
 
-/// <summary>A decoded image with its class index, identity, grouping metadata and assigned split.</summary>
-public sealed record DatasetSample(string RelativePath, int LabelIndex, string Sha256,
-    string? GroupId, DatasetSplit Split, double[] Inputs);
+/// <summary>A decoded image with its class index, relative path and assigned split.</summary>
+public sealed record DatasetSample(string RelativePath, int LabelIndex, DatasetSplit Split, double[] Inputs);
 
 /// <summary>A validated, in-memory dataset ordered by class and relative image path.</summary>
 public sealed class Dataset
 {
     public required string[] Labels { get; init; }
     public required DatasetSample[] Samples { get; init; }
-    /// <summary>A SHA256 of the ordered image identities, labels, groups and splits, using the v1 representation.</summary>
-    public required string Fingerprint { get; init; }
-    /// <summary>Whether every image has an explicit group identifier. False means only identical copies are detected.</summary>
-    public required bool CompleteGroupingMetadata { get; init; }
     public required int IgnoredFiles { get; init; }
 
-    /// <summary>Exports the exact split and image hashes for later evaluation against unchanged data.</summary>
+    /// <summary>Exports the split assignments without checking image contents.</summary>
     public SplitManifest ToManifest() => new()
     {
-        FormatVersion = 1,
+        FormatVersion = 2,
         Entries = Samples.Select(sample => new SplitEntry
         {
             Path = sample.RelativePath,
-            Split = sample.Split.ToName(),
-            GroupId = sample.GroupId,
-            Sha256 = sample.Sha256
+            Split = sample.Split.ToName()
         }).ToArray()
     };
 
-    /// <summary>Discovers, validates, groups, partitions and decodes class-directory JPEG/PNG images.</summary>
+    /// <summary>Discovers, validates, partitions and decodes class-directory JPEG/PNG images.</summary>
     /// <param name="directory">The directory whose immediate subdirectories name the classes.</param>
-    /// <param name="manifestPath">Optional grouping or split manifest; null requests automatic splitting.</param>
-    /// <param name="seed">Seed for group shuffling. Ignored when the manifest provides all three splits.</param>
-    /// <param name="requireCompleteSplit">Require an exact train/validation/test assignment and a hash for every image.</param>
-    public static Dataset Load(string directory, string? manifestPath, int seed, bool requireCompleteSplit = false) =>
-        DatasetLoader.Load(directory, manifestPath, seed, requireCompleteSplit);
+    /// <param name="manifestPath">Optional split manifest; null requests automatic splitting.</param>
+    /// <param name="seed">Seed for file shuffling. Ignored when all three splits are supplied.</param>
+    /// <param name="output">Receives compatibility notices; defaults to standard output.</param>
+    public static Dataset Load(string directory, string? manifestPath, int seed, TextWriter? output = null) =>
+        DatasetLoader.Load(directory, manifestPath, seed, output ?? Console.Out);
 }

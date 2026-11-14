@@ -1,93 +1,102 @@
 # Podsumowanie refaktoryzacji C#/.NET
 
-Data: 9 listopada 2026 r.
+Data aktualizacji: 14 listopada 2026 r.
 
-Przegląd objął bibliotekę Core, trenera CLI, aplikację WinUI, testy oraz
-konfigurację kompilacji i CI. Zmiany poprawiają czytelność i utrzymanie kodu
-przy zachowaniu dotychczasowej architektury, publicznych sygnatur oraz
-formatów modeli, manifestów i raportów v1. Nie dodano zależności ani
-nie zmieniono algorytmu uczenia i zasad podziału danych.
+Zrealizowano uproszczenie przygotowania danych i przebiegu treningu. Zachowano
+sieć `1024 → tanh → softmax`, SGD, inicjalizację Xavier, seed, wybór najlepszej
+epoki według straty walidacyjnej oraz wspólny preprocessing SkiaSharp
+`gray32-v1`. Format modelu v1, frameworki docelowe i zależności pozostają bez zmian.
 
-## Najważniejsze zmiany
+## Dane i manifesty
 
-### Biblioteka Core
+- Każdy plik jest osobną próbką. Usunięto grupowanie, union-find, obliczanie
+  SHA256 obrazów, kontrolę kopii i kompletności metadanych grupowania.
+- Zachowano cztery tryby: automatyczny podział bez manifestu, automatyczny
+  podział z nieprzypisanym manifestem, pełne przypisania train/validation/test
+  oraz train/test z wydzieleniem walidacji wyłącznie z train.
+- Zachowano sortowanie ordinal i deterministyczne tasowanie. Dla danych bez
+  dawnych grup i kopii przypisania pozostają takie same. Automatyczny podział
+  wymaga trzech plików każdej klasy; wydzielenie walidacji — dwóch plików train.
+- Nowy manifest v2 zapisuje tylko `path` i `split`. Odczyt wymaga jawnej wersji
+  1 lub 2. W v1 dawne pola `sha256` i `groupId` są ignorowane, a ich obecność
+  powoduje jeden zbiorczy komunikat. Ręczna migracja nie jest potrzebna.
+- Nadal sprawdzane są bezpieczne ścieżki, kompletność manifestu, powtórzone
+  ścieżki, poprawność przypisań i obecność każdej klasy we wszystkich częściach.
+  Zachowano dekodowanie i walidację JPEG/PNG oraz limit 20 000 obrazów w RAM.
+- Manifest potwierdza listę ścieżek, ale nie niezmienność zawartości obrazów.
+  Identyczne kopie mogą należeć do różnych części i klas. Rozłączność kopii
+  i powiązanych serii musi zapewnić osoba przygotowująca dane.
 
-- W `NeuralNetwork` ujednolicono prywatne pola do `_camelCase` i zastąpiono
-  skrótowe indeksy opisowymi nazwami. Wydzielono obliczanie aktywacji warstwy
-  ukrytej i logitów. Zachowano kolejność operacji oraz stabilne numerycznie
-  obliczanie softmax i cross-entropy.
-- W `ImagePreprocessor` oddzielono dekodowanie i walidację obrazu od
-  skalowania do szarości. Numery orientacji EXIF zastąpiono nazwami
-  `SKEncodedOrigin`, a współrzędne i współczynniki interpolacji otrzymały
-  czytelniejsze nazwy. Zachowano kontrakt `gray32-v1`.
-- Nazwano stałe wersji modelu, identyfikatora preprocessingu i limitu
-  rozmiaru pliku. Definicja preprocessingu korzysta ze wspólnych wymiarów.
-- W `ModelFile` dodano jawną walidację argumentu modelu i ścieżki katalogu
-  docelowego. Błąd usuwania pliku tymczasowego zachowuje teraz również
-  oryginalny wyjątek w `Exception.Data`.
-- Dodano dokumentację XML opisującą m.in. układ wag, kopiowanie parametrów,
-  wymagania wejścia i skutki nieudanego kroku uczenia.
+## Trening, raport i publikacja
 
-### Trener i dane
+- W każdej epoce wspólny przebieg metryk liczy jedynie loss/accuracy dla
+  train/validation. Macierze pomyłek i recall powstają dopiero na końcu.
+- Po przywróceniu najlepszego modelu obliczane są końcowe metryki train,
+  validation i jeden pomiar testu. Test nie uczestniczy w uczeniu ani wyborze epoki.
+- Jeden raport v2 zawiera etykiety, opcje, liczebności części według klas,
+  najlepszą epokę, historię loss/accuracy oraz końcowe loss, accuracy, recall
+  i macierze pomyłek. Usunięto baseline większościowy i metadane środowiska.
+- Usunięto fingerprint zbioru, hashowanie modelu i wiązanie ewaluacji
+  z tożsamością wcześniejszego eksperymentu. W tym przepływie nie ma hashy.
+- Usunięto komendę `evaluate` i osobny `.test-report.json`. Dawne raporty v1
+  pozostają archiwalne i nie są wymagane przez nowy przepływ.
+- Trening publikuje trzy pliki: model, `.split.json` i `.report.json`.
+  Zachowano odmowę nadpisania, pliki tymczasowe, sprzątanie po błędzie
+  i publikację modelu jako ostatniego pliku, oznaczającego komplet wyników.
+- README opisuje nowe CLI, manifesty, zgodność formatów i odpowiedzialność
+  za rozłączność danych. Po wdrożeniu i recenzji usunięto oba dokumenty planów.
 
-- W `Program` wydzielono parsowanie opcji treningowych z obsługi poleceń.
-  Zachowano składnię CLI, komunikaty walidacyjne i kody zakończenia.
-- W `Training` doprecyzowano nazwy próbek, metryk i najlepszego wyniku
-  walidacyjnego. Recall wylicza sumę wiersza macierzy tylko raz.
-- Dodano jawne sprawdzanie argumentów null i dodatniej liczby klas.
-  Założenie o wybraniu modelu po treningu otrzymało czytelny wyjątek
-  zamiast operatora pomijającego sprawdzanie null.
-- W `DatasetLoader` uporządkowano nazwy indeksów, ścieżek i operacji
-  grupowania. Nazwano limit liczby obrazów i udział części wydzielanych
-  automatycznie. Udokumentowano przechodnie grupowanie duplikatów oraz
-  zachowanie reprezentacji używanej do obliczania fingerprintu v1.
-- W obsłudze publikacji eksperymentu zachowywane są szczegóły wyjątków
-  sprzątania i ewentualnego błędu zapisu diagnostyki. Pierwotny wyjątek
-  publikacji pozostaje głównym zgłaszanym błędem.
+## Weryfikacja i recenzja
 
-### GUI, konwencje i CI
+- Przed zmianami przechodziło **49 testów**. Po zmianach przechodzą **64 testy**,
+  obejmujące matematykę i serializację modelu, JPEG/PNG, osiem orientacji EXIF,
+  przezroczystość, wszystkie tryby podziału, manifesty v1/v2 i błędne manifesty.
+- Nowe regresje sprawdzają akceptację kopii między częściami i klasami,
+  ignorowanie dawnych metadanych i zmienionej zawartości obrazu, schemat raportu,
+  brak wpływu testu na historię i model oraz odtwarzanie najlepszej epoki,
+  także gdy późniejsze epoki mają gorszą stratę walidacyjną.
+- Locked restore całego rozwiązania zakończył się powodzeniem. Nie zmieniono
+  pakietów ani plików `packages.lock.json`.
+- Kompilacje Release i Debug x64 z `-warnaserror` zakończyły się bez błędów
+  i ostrzeżeń kompilacji. Kontrola `dotnet format --verify-no-changes
+  --no-restore --severity warn` i `git diff --check` przeszła.
+- Pełny przepływ CLI na 48 obrazach demonstracyjnych: 5 epok, 4 neurony ukryte,
+  learning rate 0,01 i seed 42. W porównaniu z wersją sprzed uproszczenia,
+  przy tym samym zapisanym podziale, model JSON był identyczny bajt po bajcie.
+  Historia loss/accuracy, najlepsza epoka (5) oraz wszystkie końcowe metryki
+  train/validation/test były identyczne. Końcowe loss: train
+  0,4229456906876184, validation 0,4303827618099946, test 0,39220737811303064;
+  accuracy 1 i recall obu klas 1 we wszystkich częściach. Różnice tych metryk
+  przed i po wyniosły zero. Wyniki lokalne: `artifacts/simplification-20261114/`.
+- Kod produkcyjny trenera zmniejszył się z 895 do 665 linii (o 230),
+  bez dodawania zależności. Testy zmieniono zgodnie z nowymi kontraktami.
+- Niezależny subagent zrecenzował implementację po jej zakończeniu i nie znalazł
+  błędów wymagających poprawki. Zasugerował mocniejszy test odtwarzania
+  najlepszej epoki; dodano go i otrzymano końcową recenzję bez dalszych uwag.
+- Zastana lokalna zmiana komentarza XML w `TrafficSign.Core/ModelFile.cs`
+  została zachowana bez modyfikacji.
 
-- GUI przechowuje etykiety i sieć zamiast całego modelu DTO z dodatkową
-  kopią wag. Uporządkowano nazwy stanu i metod asynchronicznych oraz
-  zaktualizowano powiązane zdarzenia XAML.
-- Zachowano nieblokujące przetwarzanie, obsługę anulowania wyboru pliku
-  i wymianę wybranego obrazu dopiero po poprawnym odczycie. Obsługa błędów
-  zapisuje pełny wyjątek przez `Trace`.
-- Dodano [`.editorconfig`](../.editorconfig) z regułami formatowania,
-  nazw pól i stałych. W `Directory.Build.props` jawnie ustawiono analizę
-  SDK oraz sprawdzanie reguł stylu podczas kompilacji.
-- Dodano kontrolę `dotnet format --verify-no-changes` do
-  [workflow CI](../.github/workflows/build.yml) i opisano ją w README.
+## Zachowane efekty wcześniejszej refaktoryzacji
 
-## Weryfikacja
+Iteracja z 9 listopada uporządkowała nazewnictwo pól i indeksów, wydzieliła
+obliczanie aktywacji i logitów w sieci oraz oddzieliła dekodowanie obrazu od
+skalowania. Pozostają walidacja modelu, uporządkowana publikacja plików,
+diagnostyka błędów sprzątania i dokumentacja kontraktów Core. GUI przechowuje
+sieć i etykiety, wykonuje odczyt i predykcję asynchronicznie oraz zachowuje stan
+po anulowaniu wyboru. `.editorconfig`, analizatory SDK i kontrola formatowania
+w CI nadal obowiązują.
 
-Przed refaktoryzacją kompilacja Release przechodziła bez ostrzeżeń,
-a zestaw testów obejmował 40 przypadków. Po zmianach:
+## Ograniczenia weryfikacji
 
-- Locked restore zakończył się powodzeniem; pliki zależności nie zmieniły się.
-- Kompilacje Debug i Release x64 z `-warnaserror` zakończyły się bez
-  błędów i ostrzeżeń kompilacji.
-- Wszystkie **49 przypadków testowych** przeszły. Rozszerzenia obejmują
-  osiem orientacji EXIF, brak modyfikacji wejść i parametrów przy liczeniu
-  gradientów, układ macierzy pomyłek, recall nieobecnej klasy oraz
-  sprzątanie plików tymczasowych po odmowie nadpisania modelu.
-- `dotnet format TrafficSign-Si.slnx --verify-no-changes --no-restore --severity warn`
-  zakończył się kodem 0, a raport diagnostyczny był pusty.
-- `git diff --check` nie wykazał błędów białych znaków.
-
-Dodatkowo porównano deterministyczny eksperyment przed i po zmianach:
-48 obrazów demonstracyjnych, 5 epok, 4 neurony ukryte, seed 42 i domyślna
-wartość learning rate 0,01. Model JSON, manifest podziału i raport testowy
-były identyczne bajt po bajcie. Raport treningowy różnił się wyłącznie
-czasem wykonania. To sprawdzenie zgodności przebiegu obliczeń; dane
-demonstracyjne nie mierzą skuteczności rozpoznawania znaków drogowych.
-
-## Pozostałe ograniczenia
-
-- Podczas ładowania rozwiązania formatter zgłasza ostrzeżenia o
-  zduplikowanych plikach generowanych WinUI w `obj`. Nie są to diagnostyki
-  kodu źródłowego; sprawdzanie stylu i kompilacje kończą się powodzeniem.
-- Nie wykonano ręcznych testów GUI ani uruchomienia workflow na GitHub.
-  Lokalna weryfikacja nie potwierdza działania hostowanego runnera.
-- Nie zidentyfikowano błędu wymagającego zmiany logiki biznesowej.
-  Zmiany walidacji doprecyzowują błędy niepoprawnych argumentów API.
+- Dane demonstracyjne są wzorami poziomymi/pionowymi, a nie znakami drogowymi.
+  Wynik potwierdza zgodność techniczną, nie brak utraty skuteczności na
+  rzeczywistych znakach. Nie dostarczono rzeczywistego niezależnego testu.
+- Detector uruchomił się jako aplikacja packaged i wyświetlił ekran oraz dialog
+  wyboru modelu. Pełny ręczny przepływ GUI (model, JPEG/PNG, predykcja i błędy)
+  nie został potwierdzony: narzędzie automatyzacji nie udostępniało okna
+  `PickerHost.exe` jako celu, a próba interakcji była odrzucana także po
+  odświeżeniu i ponownym wyborze okna. Testy Core i kompilacja GUI przechodzą.
+- Formatter zgłasza ogólne ostrzeżenie ładowania obszaru roboczego WinUI,
+  kończąc kontrolę z kodem 0. Nie jest to ostrzeżenie kompilacji kodu źródłowego.
+- Nie uruchamiano workflow na GitHub; lokalne sprawdzenia nie potwierdzają
+  działania hostowanego runnera.

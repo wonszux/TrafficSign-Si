@@ -19,9 +19,9 @@ public sealed class TrainerTests
         var inputs = new double[ImagePreprocessor.InputSize];
         DatasetSample[] samples =
         [
-            new("a/1.png", 0, "", null, DatasetSplit.Test, inputs),
-            new("a/2.png", 0, "", null, DatasetSplit.Test, inputs),
-            new("b/1.png", 1, "", null, DatasetSplit.Test, inputs)
+            new("a/1.png", 0, DatasetSplit.Test, inputs),
+            new("a/2.png", 0, DatasetSplit.Test, inputs),
+            new("b/1.png", 1, DatasetSplit.Test, inputs)
         ];
 
         var metrics = Training.Evaluate(new NeuralNetwork(model), samples, 3);
@@ -80,13 +80,37 @@ public sealed class TrainerTests
         Assert.True(result == 0, error.ToString());
         var model = ModelFile.Load(modelPath);
         using var trainingReport = JsonDocument.Parse(File.ReadAllText(files.PathFor("result.report.json")));
-        Assert.False(trainingReport.RootElement.GetProperty("testEvaluated").GetBoolean());
-        Assert.False(trainingReport.RootElement.GetProperty("completeGroupingMetadata").GetBoolean());
+        Assert.Equal(2, trainingReport.RootElement.GetProperty("formatVersion").GetInt32());
         Assert.True(trainingReport.RootElement.GetProperty("selectedValidation").GetProperty("accuracy").GetDouble() >= 0.99);
-        Assert.Equal(0, Program.Run(["evaluate", modelPath, data, files.PathFor("result.split.json")], output, error));
-        using var testReport = JsonDocument.Parse(File.ReadAllText(files.PathFor("result.test-report.json")));
-        Assert.True(testReport.RootElement.GetProperty("testEvaluated").GetBoolean());
-        Assert.True(testReport.RootElement.GetProperty("test").GetProperty("accuracy").GetDouble() >= 0.99);
+        var report = trainingReport.RootElement;
+        Assert.True(report.GetProperty("test").GetProperty("accuracy").GetDouble() >= 0.99);
+        Assert.Equal(new[] { "formatVersion", "labels", "options", "bestEpoch", "classCounts", "selectedTrain", "selectedValidation", "test", "history" },
+            report.EnumerateObject().Select(property => property.Name));
+        var history = report.GetProperty("history").EnumerateArray().ToArray();
+        var best = history.MinBy(epoch => epoch.GetProperty("validation").GetProperty("loss").GetDouble());
+        Assert.Equal(best.GetProperty("epoch").GetInt32(), report.GetProperty("bestEpoch").GetInt32());
+        Assert.All(history, epoch =>
+        {
+            foreach (string split in new[] { "train", "validation" })
+            {
+                Assert.Equal(new[] { "loss", "accuracy" }, epoch.GetProperty(split).EnumerateObject().Select(property => property.Name));
+            }
+        });
+        var dataset = Dataset.Load(data, files.PathFor("result.split.json"), 0);
+        foreach (var (split, name) in new[] { (DatasetSplit.Train, "selectedTrain"), (DatasetSplit.Validation, "selectedValidation"), (DatasetSplit.Test, "test") })
+        {
+            var metrics = Training.Evaluate(new NeuralNetwork(model), dataset.Samples.Where(sample => sample.Split == split).ToArray(), model.Labels.Length);
+            var saved = report.GetProperty(name).Deserialize<Metrics>(ModelFile.JsonOptions)!;
+            Assert.Equal(metrics.Count, saved.Count);
+            Assert.Equal(metrics.Loss, saved.Loss, 12);
+            Assert.Equal(metrics.Accuracy, saved.Accuracy, 12);
+            Assert.Equal(metrics.RecallPerClass, saved.RecallPerClass);
+            for (int i = 0; i < metrics.ConfusionMatrix.Length; i++)
+            {
+                Assert.Equal(metrics.ConfusionMatrix[i], saved.ConfusionMatrix[i]);
+            }
+        }
+        Assert.Equal(3, Directory.GetFiles(files.Root, "*.json").Length);
         // No overwrite, and the report collision must be detected before a model is written.
         Assert.Equal(1, Program.Run([data, modelPath], output, error));
         string blockedModel = files.PathFor("blocked.json");
@@ -96,22 +120,64 @@ public sealed class TrainerTests
         Assert.Equal("keep me", File.ReadAllText(files.PathFor("blocked.report.json")));
     }
 
-    [Theory]
-    [InlineData("{}")]
-    [InlineData("[]")]
-    [InlineData("{\"formatVersion\":\"1\"}")]
-    [InlineData("{\"formatVersion\":1,\"modelSha256\":8}")]
-    public void SavedEvaluationRejectsMalformedTrainingReportWithoutCrashing(string report)
+    [Fact]
+    public void FinalMetricsUseBestEpochEvenWhenLaterEpochsAreWorse()
     {
         using var files = new TestFiles();
         string data = files.Dataset();
-        string model = files.PathFor("model.json");
-        Assert.Equal(0, Program.Run([data, model, "--epochs", "1", "--hidden-size", "2"], TextWriter.Null, TextWriter.Null));
-        File.WriteAllText(files.PathFor("model.report.json"), report);
-        var error = new StringWriter();
-        Assert.Equal(1, Program.Run(["evaluate", model, data, files.PathFor("model.split.json")], TextWriter.Null, error));
-        Assert.NotEmpty(error.ToString());
-        Assert.False(File.Exists(files.PathFor("model.test-report.json")));
+        var dataset = Dataset.Load(data, null, 42);
+        string manifest = files.PathFor("input.split.json");
+        File.WriteAllText(manifest, JsonSerializer.Serialize(dataset.ToManifest(), ModelFile.JsonOptions));
+        // Reverse validation patterns so further fitting of train eventually worsens validation loss.
+        foreach (var sample in dataset.Samples.Where(sample => sample.Split == DatasetSplit.Validation))
+        {
+            files.Image("data/" + sample.RelativePath, sample.LabelIndex == 0 ? 240 : 5, vertical: sample.LabelIndex == 0);
+        }
+        string modelPath = files.PathFor("best.json");
+        Assert.Equal(0, Program.Run([data, modelPath, "--epochs", "20", "--hidden-size", "4", "--learning-rate", "0.03", "--split-manifest", manifest], TextWriter.Null, TextWriter.Null));
+        using var report = JsonDocument.Parse(File.ReadAllText(files.PathFor("best.report.json")));
+        var root = report.RootElement;
+        Assert.True(root.GetProperty("bestEpoch").GetInt32() < 20);
+        double bestLoss = root.GetProperty("history").EnumerateArray().Min(epoch => epoch.GetProperty("validation").GetProperty("loss").GetDouble());
+        Assert.Equal(bestLoss, root.GetProperty("selectedValidation").GetProperty("loss").GetDouble(), 12);
+        var selectedNetwork = new NeuralNetwork(ModelFile.Load(modelPath));
+        var loaded = Dataset.Load(data, manifest, 0);
+        foreach (var (split, name) in new[] { (DatasetSplit.Validation, "selectedValidation"), (DatasetSplit.Test, "test") })
+        {
+            var metrics = Training.Evaluate(selectedNetwork, loaded.Samples.Where(sample => sample.Split == split).ToArray(), 2);
+            Assert.Equal(root.GetProperty(name).GetProperty("loss").GetDouble(), metrics.Loss, 12);
+        }
+    }
+
+    [Fact]
+    public void TestImagesDoNotAffectHistoryOrSelectedModel()
+    {
+        using var files = new TestFiles();
+        string data = files.Dataset();
+        string first = files.PathFor("first.json");
+        string second = files.PathFor("second.json");
+        string[] options = ["--epochs", "20", "--hidden-size", "4", "--learning-rate", "0.5", "--seed", "42"];
+        Assert.Equal(0, Program.Run([data, first, .. options], TextWriter.Null, TextWriter.Null));
+        var dataset = Dataset.Load(data, files.PathFor("first.split.json"), 0);
+        foreach (var sample in dataset.Samples.Where(sample => sample.Split == DatasetSplit.Test))
+        {
+            files.Image("data/" + sample.RelativePath, sample.LabelIndex == 0 ? 240 : 5, vertical: sample.LabelIndex == 0);
+        }
+        Assert.Equal(0, Program.Run([data, second, .. options, "--split-manifest", files.PathFor("first.split.json")], TextWriter.Null, TextWriter.Null));
+        Assert.Equal(File.ReadAllText(first), File.ReadAllText(second));
+        using var firstReport = JsonDocument.Parse(File.ReadAllText(files.PathFor("first.report.json")));
+        using var secondReport = JsonDocument.Parse(File.ReadAllText(files.PathFor("second.report.json")));
+        Assert.Equal(firstReport.RootElement.GetProperty("history").GetRawText(), secondReport.RootElement.GetProperty("history").GetRawText());
+        Assert.NotEqual(firstReport.RootElement.GetProperty("test").GetRawText(), secondReport.RootElement.GetProperty("test").GetRawText());
+    }
+
+    [Fact]
+    public void RemovedEvaluateCommandIsNotAdvertisedOrAccepted()
+    {
+        var help = new StringWriter();
+        Assert.Equal(0, Program.Run(["--help"], help, TextWriter.Null));
+        Assert.DoesNotContain("evaluate", help.ToString());
+        Assert.Equal(1, Program.Run(["evaluate", "model.json", "data", "split.json"], TextWriter.Null, TextWriter.Null));
     }
 
     [Theory]

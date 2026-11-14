@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using TrafficSign.Core;
 
@@ -16,18 +14,18 @@ internal static class DatasetLoader
         public string FullPath { get; } = fullPath;
         public string RelativePath { get; } = relativePath;
         public int LabelIndex { get; } = labelIndex;
-        public string Sha256 { get; set; } = string.Empty;
-        public string? GroupId { get; set; }
         public DatasetSplit? Split { get; set; }
     }
 
-    public static Dataset Load(string directory, string? manifestPath, int seed, bool requireCompleteSplit)
+    public static Dataset Load(string directory, string? manifestPath, int seed, TextWriter output)
     {
         var (labels, images, ignoredFiles) = DiscoverImages(directory);
-        var manifest = LoadManifest(manifestPath, images, requireCompleteSplit);
-        ReadMetadata(images, manifest);
-        var groups = BuildIndependentGroups(images);
-        AssignSplits(groups, labels, seed, requireCompleteSplit);
+        var manifest = LoadManifest(manifestPath, images, output);
+        foreach (var image in images)
+        {
+            image.Split = DatasetSplits.Parse(manifest?.GetValueOrDefault(image.RelativePath)?.Split);
+        }
+        AssignSplits(images, labels, seed);
         ValidateSplitCoverage(images, labels);
         var samples = DecodeSamples(images);
 
@@ -35,8 +33,6 @@ internal static class DatasetLoader
         {
             Labels = labels,
             Samples = samples,
-            Fingerprint = ComputeFingerprint(samples),
-            CompleteGroupingMetadata = images.All(image => image.GroupId is not null),
             IgnoredFiles = ignoredFiles
         };
     }
@@ -84,29 +80,32 @@ internal static class DatasetLoader
     }
 
     private static Dictionary<string, SplitEntry>? LoadManifest(
-        string? path, PreparedImage[] images, bool requireCompleteSplit)
+        string? path, PreparedImage[] images, TextWriter output)
     {
         if (path is null)
         {
-            if (requireCompleteSplit)
-            {
-                throw new InvalidDataException("Evaluation requires a saved split manifest.");
-            }
             return null;
         }
 
         using var stream = File.OpenRead(path);
         SplitManifest manifest;
+        bool hasLegacyMetadata;
         try
         {
-            manifest = JsonSerializer.Deserialize<SplitManifest>(stream, ModelFile.JsonOptions)
+            using var document = JsonDocument.Parse(stream);
+            manifest = document.RootElement.Deserialize<SplitManifest>(ModelFile.JsonOptions)
                 ?? throw new InvalidDataException("Split manifest cannot be null.");
+            hasLegacyMetadata = manifest.FormatVersion == 1 &&
+                document.RootElement.GetProperty("entries").ValueKind == JsonValueKind.Array &&
+                document.RootElement.GetProperty("entries").EnumerateArray().Any(entry =>
+                    entry.ValueKind == JsonValueKind.Object &&
+                    (entry.TryGetProperty("sha256", out _) || entry.TryGetProperty("groupId", out _)));
         }
         catch (JsonException failure)
         {
             throw new JsonException($"Invalid split manifest: {failure.Message}", failure);
         }
-        if (manifest.FormatVersion != 1 || manifest.Entries is null)
+        if (manifest.FormatVersion is not (1 or 2) || manifest.Entries is null)
         {
             throw new InvalidDataException("Unsupported split manifest.");
         }
@@ -124,162 +123,73 @@ internal static class DatasetLoader
             {
                 throw new InvalidDataException($"Duplicate manifest path: {normalizedPath}");
             }
-            if (requireCompleteSplit && entry.Sha256 is null)
-            {
-                throw new InvalidDataException("Saved evaluation split manifest must contain SHA256 for every image.");
-            }
             DatasetSplits.Parse(entry.Split);
         }
         if (entries.Count != images.Length || images.Any(image => !entries.ContainsKey(image.RelativePath)))
         {
             throw new InvalidDataException("Manifest must describe every dataset image exactly once.");
         }
+        if (hasLegacyMetadata)
+        {
+            output.WriteLine("Notice: legacy manifest v1 sha256/groupId metadata is ignored; image contents are not verified or grouped.");
+        }
         return entries;
     }
 
-    private static void ReadMetadata(PreparedImage[] images, Dictionary<string, SplitEntry>? manifest)
+    private static void AssignSplits(PreparedImage[] images, string[] labels, int seed)
     {
-        foreach (var image in images)
-        {
-            using var stream = File.OpenRead(image.FullPath);
-            image.Sha256 = Convert.ToHexString(SHA256.HashData(stream));
-            var entry = manifest?.GetValueOrDefault(image.RelativePath);
-            if (entry?.Sha256 is not null && !image.Sha256.Equals(entry.Sha256, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException($"Image changed since split was saved: {image.RelativePath}");
-            }
-            image.GroupId = string.IsNullOrWhiteSpace(entry?.GroupId) ? null : entry.GroupId;
-            image.Split = DatasetSplits.Parse(entry?.Split);
-        }
-    }
-
-    private static PreparedImage[][] BuildIndependentGroups(PreparedImage[] images)
-    {
-        int[] parents = Enumerable.Range(0, images.Length).ToArray();
-        var hashOwners = new Dictionary<string, int>(StringComparer.Ordinal);
-        var groupOwners = new Dictionary<string, int>(StringComparer.Ordinal);
-        // Duplicate content and explicit groups form transitive components, which must never cross splits.
-        for (int imageIndex = 0; imageIndex < images.Length; imageIndex++)
-        {
-            var image = images[imageIndex];
-            if (hashOwners.TryGetValue(image.Sha256, out int duplicateIndex))
-            {
-                if (images[duplicateIndex].LabelIndex != image.LabelIndex)
-                {
-                    throw new InvalidDataException($"Identical image has conflicting labels: {image.RelativePath}");
-                }
-                Union(duplicateIndex, imageIndex);
-            }
-            else
-            {
-                hashOwners[image.Sha256] = imageIndex;
-            }
-            if (image.GroupId is { } group)
-            {
-                if (groupOwners.TryGetValue(group, out int groupOwnerIndex))
-                {
-                    Union(groupOwnerIndex, imageIndex);
-                }
-                else
-                {
-                    groupOwners[group] = imageIndex;
-                }
-            }
-        }
-
-        var groups = Enumerable.Range(0, images.Length).GroupBy(FindRoot)
-            .Select(group => group.Select(index => images[index]).ToArray()).ToArray();
-        foreach (var group in groups)
-        {
-            if (group.Select(image => image.LabelIndex).Distinct().Count() > 1)
-            {
-                throw new InvalidDataException("A group spans several labels. This trainer requires groups of one sign class.");
-            }
-            if (group.Where(image => image.Split.HasValue).Select(image => image.Split).Distinct().Count() > 1)
-            {
-                throw new InvalidDataException($"A duplicate image or group crosses splits: {group[0].RelativePath}");
-            }
-        }
-        return groups;
-
-        int FindRoot(int imageIndex)
-        {
-            while (parents[imageIndex] != imageIndex)
-            {
-                parents[imageIndex] = parents[parents[imageIndex]];
-                imageIndex = parents[imageIndex];
-            }
-            return imageIndex;
-        }
-
-        void Union(int firstIndex, int secondIndex) => parents[FindRoot(secondIndex)] = FindRoot(firstIndex);
-    }
-
-    private static void AssignSplits(PreparedImage[][] groups, string[] labels, int seed, bool requireCompleteSplit)
-    {
-        var images = groups.SelectMany(group => group).ToArray();
         bool anyAssigned = images.Any(image => image.Split.HasValue);
         bool needsValidationSplit = anyAssigned && !images.Any(image => image.Split == DatasetSplit.Validation);
         if (anyAssigned && images.Any(image => !image.Split.HasValue))
         {
             throw new InvalidDataException("Supply splits for all images, or leave all unassigned.");
         }
-        if (requireCompleteSplit && (!anyAssigned || needsValidationSplit))
-        {
-            throw new InvalidDataException("Evaluation requires the exact saved train/validation/test split.");
-        }
 
         var random = new Random(seed);
         for (int labelIndex = 0; labelIndex < labels.Length; labelIndex++)
         {
-            var classGroups = groups.Where(group => group[0].LabelIndex == labelIndex).ToArray();
+            var classImages = images.Where(image => image.LabelIndex == labelIndex).ToArray();
             if (!anyAssigned)
             {
-                AssignAutomaticSplits(classGroups, labels[labelIndex], random);
+                AssignAutomaticSplits(classImages, labels[labelIndex], random);
             }
             else if (needsValidationSplit)
             {
-                ReserveValidation(classGroups, labels[labelIndex], random);
+                ReserveValidation(classImages, labels[labelIndex], random);
             }
         }
     }
 
-    private static void AssignAutomaticSplits(PreparedImage[][] groups, string label, Random random)
+    private static void AssignAutomaticSplits(PreparedImage[] images, string label, Random random)
     {
-        if (groups.Length < 3)
+        if (images.Length < 3)
         {
-            throw new InvalidDataException($"Class '{label}' needs at least three independent images/groups.");
+            throw new InvalidDataException($"Class '{label}' needs at least three files.");
         }
-        random.Shuffle(groups);
-        int validationCount = Math.Clamp((int)Math.Round(groups.Length * HeldOutSplitFraction), 1, groups.Length - 2);
-        int testCount = Math.Clamp((int)Math.Round(groups.Length * HeldOutSplitFraction), 1, groups.Length - validationCount - 1);
-        for (int i = 0; i < groups.Length; i++)
+        random.Shuffle(images);
+        int validationCount = Math.Clamp((int)Math.Round(images.Length * HeldOutSplitFraction), 1, images.Length - 2);
+        int testCount = Math.Clamp((int)Math.Round(images.Length * HeldOutSplitFraction), 1, images.Length - validationCount - 1);
+        for (int i = 0; i < images.Length; i++)
         {
             var split = i < testCount ? DatasetSplit.Test
                 : i < testCount + validationCount ? DatasetSplit.Validation : DatasetSplit.Train;
-            foreach (var image in groups[i])
-            {
-                image.Split = split;
-            }
+            images[i].Split = split;
         }
     }
 
-    private static void ReserveValidation(PreparedImage[][] groups, string label, Random random)
+    private static void ReserveValidation(PreparedImage[] images, string label, Random random)
     {
-        var trainingGroups = groups.Where(group => group[0].Split == DatasetSplit.Train).ToArray();
-        if (trainingGroups.Length < 2)
+        var trainingImages = images.Where(image => image.Split == DatasetSplit.Train).ToArray();
+        if (trainingImages.Length < 2)
         {
-            throw new InvalidDataException($"Class '{label}' needs at least two training groups to reserve validation.");
+            throw new InvalidDataException($"Class '{label}' needs at least two training files to reserve validation.");
         }
-        random.Shuffle(trainingGroups);
+        random.Shuffle(trainingImages);
         // Reserve 15 of the nominal 85 non-test percent without changing the supplied test split.
-        int validationCount = Math.Clamp((int)Math.Round(trainingGroups.Length * 15.0 / 85), 1, trainingGroups.Length - 1);
-        foreach (var group in trainingGroups.Take(validationCount))
+        int validationCount = Math.Clamp((int)Math.Round(trainingImages.Length * 15.0 / 85), 1, trainingImages.Length - 1);
+        foreach (var image in trainingImages.Take(validationCount))
         {
-            foreach (var image in group)
-            {
-                image.Split = DatasetSplit.Validation;
-            }
+            image.Split = DatasetSplit.Validation;
         }
     }
 
@@ -291,28 +201,14 @@ internal static class DatasetLoader
             {
                 if (!images.Any(image => image.LabelIndex == labelIndex && image.Split == split))
                 {
-                    throw new InvalidDataException($"Class '{labels[labelIndex]}' has no independent samples in {split.ToName()}.");
+                    throw new InvalidDataException($"Class '{labels[labelIndex]}' has no samples in {split.ToName()}.");
                 }
             }
         }
     }
 
     private static DatasetSample[] DecodeSamples(PreparedImage[] images) => images.Select(image =>
-        new DatasetSample(image.RelativePath, image.LabelIndex, image.Sha256, image.GroupId,
+        new DatasetSample(image.RelativePath, image.LabelIndex,
             image.Split ?? throw new InvalidOperationException($"Image has no assigned split: {image.RelativePath}"),
             ImagePreprocessor.Process(image.FullPath))).ToArray();
-
-    private static string ComputeFingerprint(DatasetSample[] samples)
-    {
-        // v1 fingerprints use this compact PascalCase representation, not manifest JSON options.
-        string description = JsonSerializer.Serialize(samples.Select(sample => new
-        {
-            sample.RelativePath,
-            sample.LabelIndex,
-            sample.Sha256,
-            sample.GroupId,
-            Split = sample.Split.ToName()
-        }));
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(description)));
-    }
 }

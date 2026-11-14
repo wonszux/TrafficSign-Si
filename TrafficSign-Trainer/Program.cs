@@ -3,12 +3,11 @@ using System.Text.Json;
 
 namespace TrafficSign.Trainer;
 
-/// <summary>Command-line entry point for training and evaluating saved experiments.</summary>
+/// <summary>Command-line entry point for training with final held-out evaluation.</summary>
 public static class Program
 {
     private const string Usage = "Usage: TrafficSign-Trainer <data-folder> <model.json> [--epochs N] " +
-        "[--learning-rate X] [--hidden-size N] [--seed N] [--split-manifest split.json]\n" +
-        "       TrafficSign-Trainer evaluate <model.json> <data-folder> <saved.split.json>";
+        "[--learning-rate X] [--hidden-size N] [--seed N] [--split-manifest split.json]";
 
     public static int Main(string[] args) => Run(args, Console.Out, Console.Error);
 
@@ -25,16 +24,6 @@ public static class Program
             if (args.Length == 1 && args[0] is "--help" or "-h")
             {
                 output.WriteLine(Usage);
-                return 0;
-            }
-            if (args.Length > 0 && args[0] == "evaluate")
-            {
-                if (args.Length != 4)
-                {
-                    throw new ArgumentException(Usage);
-                }
-
-                Training.EvaluateSaved(args[1], args[2], args[3], output);
                 return 0;
             }
             if (args.Length < 2)

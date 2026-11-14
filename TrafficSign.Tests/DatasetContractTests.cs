@@ -8,25 +8,25 @@ namespace TrafficSign.Tests;
 public sealed class DatasetContractTests
 {
     [Fact]
-    public void V1SplitAndFingerprintMatchThePreRefactoringSnapshot()
+    public void FileSplitMatchesThePreRefactoringSnapshot()
     {
         using var files = new TestFiles();
         string root = CreateSnapshotDataset(files);
         var dataset = Dataset.Load(root, null, 42);
 
         // Recorded from commit 618158c, with fixed encoded bytes rather than a platform encoder.
-        Assert.Equal("92EB9AD6466B197416DE74C4B13DECCDA8C4030ACF87EBCED53CB752535A4A73", dataset.Fingerprint);
         Assert.Equal(new[] { "train", "validation", "test", "test", "train", "validation" },
             dataset.ToManifest().Entries.Select(entry => entry.Split));
 
         string manifest = files.PathFor("snapshot.json");
         File.WriteAllText(manifest, JsonSerializer.Serialize(dataset.ToManifest(), ModelFile.JsonOptions));
-        Assert.Equal(dataset.Fingerprint, Dataset.Load(root, manifest, 999, requireCompleteSplit: true).Fingerprint);
+        Assert.Equal(dataset.ToManifest().Entries.Select(entry => entry.Split),
+            Dataset.Load(root, manifest, 999).ToManifest().Entries.Select(entry => entry.Split));
     }
 
     [Theory]
     [InlineData("{\"entries\":[]}")]
-    [InlineData("{\"formatVersion\":2,\"entries\":[]}")]
+    [InlineData("{\"formatVersion\":3,\"entries\":[]}")]
     [InlineData("{\"formatVersion\":\"1\",\"entries\":[]}")]
     [InlineData("{\"formatVersion\":1,\"entries\":null}")]
     [InlineData("{\"formatVersion\":1,\"entries\":[null]}")]

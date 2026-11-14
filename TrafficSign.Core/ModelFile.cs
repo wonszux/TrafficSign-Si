@@ -30,7 +30,7 @@ public static class ModelFile
     }
 
     /// <summary>Validates and publishes a model by moving a temporary file in the target directory.</summary>
-    /// <exception cref="IOException">The destination already exists, or writing or moving the file fails.</exception>
+    /// <exception cref="IOException">The destination already exists, or writing or moving the file fails.</exception
     public static void Save(string path, ModelData model)
     {
         ArgumentNullException.ThrowIfNull(model);

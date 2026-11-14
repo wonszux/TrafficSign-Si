@@ -1,10 +1,9 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using TrafficSign.Core;
 
 namespace TrafficSign.Trainer;
 
-internal sealed record ExperimentPaths(string Model, string Report, string Split, string TestReport)
+internal sealed record ExperimentPaths(string Model, string Report, string Split)
 {
     public static ExperimentPaths ForModel(string modelPath)
     {
@@ -12,7 +11,7 @@ internal sealed record ExperimentPaths(string Model, string Report, string Split
         string directory = Path.GetDirectoryName(fullModelPath)
             ?? throw new ArgumentException("Model path must name a file.", nameof(modelPath));
         string stem = Path.Combine(directory, Path.GetFileNameWithoutExtension(fullModelPath));
-        return new ExperimentPaths(fullModelPath, stem + ".report.json", stem + ".split.json", stem + ".test-report.json");
+        return new ExperimentPaths(fullModelPath, stem + ".report.json", stem + ".split.json");
     }
 
     public void EnsureTrainingOutputsAvailable() => ExperimentFiles.EnsureAvailable(Model, Report, Split);
@@ -29,23 +28,6 @@ internal static class ExperimentFiles
         }
     }
 
-    public static string HashFile(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream));
-    }
-
-    public static void VerifyIdentity(ExperimentPaths paths, Dataset dataset, string modelHash)
-    {
-        using var stream = File.OpenRead(paths.Report);
-        var identity = JsonSerializer.Deserialize<TrainingReportIdentity>(stream, ModelFile.JsonOptions);
-        if (identity is null || identity.FormatVersion != 1 || identity.ModelSha256 != modelHash ||
-            identity.DatasetFingerprint != dataset.Fingerprint)
-        {
-            throw new InvalidDataException("Model or split does not match the original training report.");
-        }
-    }
-
     public static void PublishTraining(
         ExperimentPaths paths, ModelData model, SplitManifest split, TrainingReport report, TextWriter output)
     {
@@ -59,7 +41,7 @@ internal static class ExperimentFiles
         try
         {
             ModelFile.Save(modelTemporary, model);
-            WriteJsonNew(reportTemporary, report with { ModelSha256 = HashFile(modelTemporary) });
+            WriteJsonNew(reportTemporary, report);
             WriteJsonNew(splitTemporary, split);
             Publish(splitTemporary, paths.Split);
             Publish(reportTemporary, paths.Report);
@@ -75,21 +57,6 @@ internal static class ExperimentFiles
         {
             File.Move(temporary, target, overwrite: false);
             published.Add(target);
-        }
-    }
-
-    public static void PublishTestReport(string path, TestReport report, TextWriter output)
-    {
-        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            WriteJsonNew(temporary, report);
-            File.Move(temporary, path, overwrite: false);
-        }
-        catch (Exception failure)
-        {
-            Cleanup([temporary], output, failure);
-            throw;
         }
     }
 

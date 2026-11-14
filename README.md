@@ -54,7 +54,7 @@ data/
 
 Obsługiwane są statyczne JPEG/PNG do 20 milionów pikseli. Każdy obraz jest
 rzeczywiście dekodowany; uszkodzony plik przerywa przygotowanie danych.
-Wymagane są co najmniej dwie klasy i trzy niezależne obrazy/grupy każdej klasy,
+Wymagane są co najmniej dwie klasy i trzy pliki każdej klasy,
 aby każda miała część treningową, walidacyjną i testową. Trzy przykłady to minimum
 techniczne, zbyt mało do wiarygodnego pomiaru skuteczności. Dla pierwszego
 eksperymentu wybierz 5–10 klas i znacznie więcej przykładów. Limit to 20 000
@@ -73,42 +73,49 @@ powtórzenia, błędne wartości i istniejące pliki wynikowe są odrzucane.
 Powstają trzy pliki:
 
 - `signs.json`: model v1, preprocessing, kolejność klas, wagi i biasy;
-- `signs.report.json`: ustawienia, wybrana epoka, metryki treningu/walidacji,
-  macierze pomyłek, baseline najczęstszej klasy i skróty modelu/danych;
-- `signs.split.json`: dokładny podział z SHA256 każdego obrazu i metadanymi grup.
+- `signs.report.json`: raport v2 z ustawieniami, liczebnościami części, najlepszą
+  epoką, historią loss/accuracy train/validation i końcowymi metrykami wszystkich
+  trzech części (loss, accuracy, recall klas i macierze pomyłek);
+- `signs.split.json`: manifest v2 z dokładnym podziałem; wpisy zawierają tylko
+  `path` i `split`.
 
 Nie są nadpisywane. Wybierz nową nazwę przy kolejnym eksperymencie. Model jest
 publikowany dopiero po przygotowaniu i zapisie raportu oraz podziału.
 
-Bez manifestu program sortuje dane porządkiem ordinal, losuje deterministycznie
-całe grupy identycznych plików, roboczo 70/15/15. Proporcje dotyczą grup,
-więc przy grupach różnej wielkości liczby zdjęć mogą się różnić. Każda klasa
-musi występować we wszystkich częściach. Identyczne pliki z różnymi etykietami
-są błędem. Bez metadanych serii program wykrywa tylko identyczne kopie;
-podobne ujęcia tego samego znaku mogą pozostać nierozpoznane. Raport wskazuje
-ten brak, zamiast deklarować pełną ochronę przed przeciekiem danych.
+Bez manifestu program sortuje dane porządkiem ordinal i tasuje pojedyncze pliki
+z ustalonym seedem, dzieląc każdą klasę w przybliżeniu 70/15/15. Każda klasa
+musi występować we wszystkich częściach. Każda ścieżka jest osobną próbką.
+Program nie wykrywa identycznych kopii ani powiązanych serii zdjęć, także między
+częściami i klasami. Przygotowując dane, samodzielnie zadbaj o ich rozłączność.
 
-## Oficjalny podział i serie zdjęć
+## Manifest i oficjalny podział
 
 Opcjonalny manifest opisuje wszystkie obrazy dokładnie raz. Ścieżki są względne
 wobec katalogu danych, etykieta nadal wynika z katalogu klasy:
 
 ```json
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "entries": [
-    { "path": "stop/001.png", "split": "train", "groupId": "stop-seria-1" },
-    { "path": "stop/002.jpg", "split": "train", "groupId": "stop-seria-1" }
+    { "path": "stop/001.png", "split": "train" },
+    { "path": "stop/002.jpg", "split": "train" }
   ]
 }
 ```
 
 To fragment ilustrujący format, a nie kompletny zbiór gotowy do treningu.
 `split` przyjmuje `train`, `validation`, `test` albo `null`; albo przypisz go
-wszystkim obrazom, albo wszystkim pozostaw `null`. `groupId` jest opcjonalne.
-Grupa musi zawierać jedną klasę i w całości należeć do jednej części. Podział
-oficjalny train/test zostaje zachowany, a walidacja jest wydzielana wyłącznie
-z train. Puste/za małe części powodują błąd zamiast kopiowania przykładów.
+wszystkim obrazom, albo wszystkim pozostaw `null`. Przy wszystkich wartościach
+`null` działa ten sam automatyczny podział co bez manifestu. Pełny podział
+train/validation/test zachowuje przypisania niezależnie od seeda. Przy podziale
+train/test walidacja jest wydzielana wyłącznie z train, co wymaga co najmniej
+dwóch plików train każdej klasy. Puste/za małe części powodują błąd.
+
+Manifest musi podawać jawną wersję 1 lub 2, bezpieczne ścieżki względne i każdy
+obraz dokładnie raz. Dawne manifesty v1 są czytane bez ręcznej migracji; pola
+`sha256` i `groupId` są ignorowane z jednym zbiorczym komunikatem. Zapisany
+manifest sprawdza listę ścieżek, ale nie potwierdza niezmienności zawartości
+obrazów. Nowe manifesty zawsze mają wersję 2.
 
 ```powershell
 dotnet run --project TrafficSign-Trainer -- "data" "models/signs.json" --split-manifest "official-split.json"
@@ -116,18 +123,16 @@ dotnet run --project TrafficSign-Trainer -- "data" "models/signs.json" --split-m
 
 ## Ocena wybranego modelu
 
-Trening wybiera epokę o najmniejszej stracie walidacyjnej i nie pokazuje wyniku
-testowego. Po zakończeniu strojenia oceń zapisany model, bez ponownego uczenia:
+Trening wybiera epokę o najmniejszej stracie walidacyjnej. Po odtworzeniu tego
+modelu oblicza końcowe metryki train/validation i jednokrotnie ocenia test,
+a następnie zapisuje je w jednym `signs.report.json`. Test nie bierze udziału
+w uczeniu ani wyborze epoki. Historia epok zawiera tylko loss i accuracy dla
+train/validation; recall i macierze pomyłek są obliczane na końcu.
 
-```powershell
-dotnet run --project TrafficSign-Trainer -- evaluate "models/signs.json" "data" "models/signs.split.json"
-```
-
-Polecenie wymaga oryginalnego raportu treningowego obok modelu. Weryfikuje
-model, etykiety, skróty danych i podział; zapisuje `signs.test-report.json`
-z accuracy, recall per klasa, stratą i macierzą pomyłek. Wiersze macierzy to
-klasy rzeczywiste, kolumny — przewidziane. Jeśli dobierasz ustawienia według
-wyniku testowego, nie jest on już niezależną oceną.
+Komenda `evaluate` i osobny `.test-report.json` zostały usunięte. Dawne raporty
+v1 pozostają archiwalne i nie są wymagane do treningu ani korzystania z modelu.
+Wiersze macierzy pomyłek to klasy rzeczywiste, kolumny — przewidziane. Jeśli
+dobierasz ustawienia według wyniku testowego, nie jest on już niezależną oceną.
 
 ## Użycie GUI i format modelu
 
@@ -148,7 +153,6 @@ Stara luźna tablica wag z początkowego szkieletu nie jest obsługiwanym modele
 ```powershell
 .\tools\New-DemoDataset.ps1
 dotnet run --project TrafficSign-Trainer -- "artifacts/demo-data" "artifacts/demo/signs.json" --epochs 10 --hidden-size 8
-dotnet run --project TrafficSign-Trainer -- evaluate "artifacts/demo/signs.json" "artifacts/demo-data" "artifacts/demo/signs.split.json"
 ```
 
 Skrypt tworzy 48 własnych wzorów poziomych/pionowych, bez zewnętrznych plików.
@@ -170,8 +174,9 @@ metadane serii. `data/`, `models/`, `runs/` i `artifacts/` są ignorowane przez 
 
 Dekodowanie używa [SkiaSharp (MIT)](https://github.com/mono/SkiaSharp/blob/main/LICENSE.txt).
 Nie ma frameworka uczenia maszynowego, serwera ani bazy danych.
-Manifest podziału wymaga jawnego `formatVersion: 1`; brak wersji jest błędem.
-Istniejące modele, wersjonowane manifesty i raporty v1 zachowują zgodność.
+Format modelu v1 i kontrakt `gray32-v1` pozostają bez zmian. Manifesty v1/v2
+są obsługiwane na opisanych wyżej zasadach; raporty v2 zastępują nowy zapis
+raportów v1. Brak wersji manifestu jest błędem.
 
 Konwencje nazewnictwa i formatowania ustala [`.editorconfig`](.editorconfig),
 zgodnie z [konwencjami C# Microsoft](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/identifier-names).
@@ -186,8 +191,8 @@ Workflow [build.yml](.github/workflows/build.yml) sprawdza locked restore,
 build Release x64, styl kodu i testy na Windows. Jego wykonanie na GitHub wymaga osobnego
 potwierdzenia; lokalny build nie dowodzi sukcesu hostowanego runnera.
 
-Aktualny plan, wynik recenzji i status wdrożenia:
-[PLAN-IMPLEMENTACJI.md](docs/PLAN-IMPLEMENTACJI.md).
-
 Zakres zmian jakościowych i wyniki ich weryfikacji:
 [PODSUMOWANIE-REFAKTORYZACJI.md](docs/PODSUMOWANIE-REFAKTORYZACJI.md).
+
+Wyniki treningów na zdjęciach znaków, ograniczenia klas i porównanie seedów:
+[PODSUMOWANIE-EKSPERYMENTOW.md](docs/PODSUMOWANIE-EKSPERYMENTOW.md).
